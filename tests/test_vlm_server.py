@@ -10,7 +10,7 @@ from PIL import Image
 
 from vlm_server import protocol as P
 from vlm_server.http_api import create_app
-from vlm_server.pipeline import Detection, encode_mask_crop, to_pixel_box
+from vlm_server.pipeline import Detection, TargetFinder, encode_mask_crop, to_pixel_box
 from vlm_server.query import QueryStore
 from vlm_server.zmq_server import Stats, Worker, ZmqServer
 
@@ -64,6 +64,11 @@ class Geometry(unittest.TestCase):
     def test_pixel_box_is_exclusive_and_clipped(self):
         self.assertEqual(to_pixel_box([10.4, 5.6, 20.2, 30.9], 64, 48), [10, 5, 21, 31])
         self.assertEqual(to_pixel_box([-5, -5, 100, 100], 64, 48), [0, 0, 64, 48])
+
+    def test_oversized_image_rejected_before_locate(self):
+        finder = TargetFinder.__new__(TargetFinder)
+        with self.assertRaises(ValueError):
+            finder.find(jpeg(2000, 100), 'cup')
 
     def test_mask_crop_matches_bbox(self):
         mask = np.zeros((48, 64), bool)

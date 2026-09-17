@@ -250,7 +250,19 @@ network_ms  = rtt_ms − server_ms
 handoff_ms  = 建 target + 在目前這一幀驗證的時間
 ```
 
-目前還沒有實測數據。`vlm.timeout_s` 和 `vlm.refresh_period_s` 要等量到 `rtt_ms` 的分布後再決定。
+目前還沒有 WiFi 上的 `rtt_ms` 實測。`vlm.timeout_s` 和 `vlm.refresh_period_s` 要等量到 `rtt_ms` 的分布後再決定。
+
+**server 端推論時間初測**（2026-09-18，Hackathon-gpu Radeon 860M，`LA_MODE=slow`，`scripts/smoke_pipeline.py`，不含網路，每組 3 次、排除第 1 次暖機）：
+
+| 圖片 | 模式 | locate_ms | sam_ms | 合計 |
+|---|---|---:|---:|---:|
+| 640×432，15 隻狗 | 只回 bbox | ≈6350 | — | ≈6350 |
+| 640×256，4 隻狗 | bbox + mask（SAM 1024） | ≈2540 | ≈600–630 | ≈3150 |
+
+- Locate 時間看起來會隨畫面中符合描述的物件數量變多（15 個候選 vs 4 個），樣本只有兩張，還不能下定論。
+- 第一次 SAM 呼叫約 2.3 秒（暖機）。
+- 以這個量級來看，`vlm.timeout_s = 5.0` 可能不夠，畫面物件一多就會逾時。
+- server 會拒絕長邊超過 `VLM_MAX_INPUT_SIDE`（預設 1280）的圖並回 `ERROR`：實測 4000×2700 的圖會讓 Locate 嘗試配置 41 GB 記憶體後 segfault。
 
 ## 9. 開發順序建議
 

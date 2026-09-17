@@ -93,6 +93,11 @@ class TargetFinder:
 
     def find(self, jpeg, text):
         """-> Detection, or None when Locate returns no valid box."""
+        # Locate segfaults on huge inputs (a 4000x2700 image tried a 41 GB buffer),
+        # which would take the whole server down; reject before calling it.
+        limit = int(os.getenv('VLM_MAX_INPUT_SIDE', '1280'))
+        if max(Image.open(io.BytesIO(jpeg)).size) > limit:
+            raise ValueError(f'image larger than {limit}px; downscale before upload')
         timings = {}
         start = time.monotonic()
         boxes, _raw = self.locator.locate(jpeg, text)
