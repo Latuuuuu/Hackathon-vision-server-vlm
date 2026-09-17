@@ -230,9 +230,9 @@ client 逾時後可能會送出新的 request，server 這時可能還在處理�
 | 參數 | 預設 | 說明 |
 |---|---|---|
 | `vlm.enable` | `false` | 關閉時沿用 `target_image_path` 的靜態 target |
-| `vlm.endpoint` | `tcp://192.168.0.100:5555` | server 位址，IP 待定 |
-| `vlm.timeout_s` | `5.0` | 等待回應的上限 |
-| `vlm.refresh_period_s` | `3.0` | 追蹤中定期送圖的間隔 |
+| `vlm.endpoint` | `tcp://192.168.50.125:5555` | server 位址（Hackathon-gpu） |
+| `vlm.timeout_s` | `6.0` | 等待回應的上限。`LA_MODE=fast` 實測 rtt p50 3.44 s、max 3.71 s，留約 2.3 s 餘裕；`slow`／`hybrid` 要改成 `12.0` |
+| `vlm.refresh_period_s` | `8.0` | 追蹤中定期送圖的間隔。必須明顯大於推論時間，否則上一筆剛回來就送下一筆，GPU 全程忙碌 |
 | `vlm.lost_frames_trigger` | `10` | 連續追丟幾幀就送圖 |
 | `vlm.upload_max_width` | `640` | 上傳前縮圖的最大寬度，應配合 VLM 的輸入尺寸 |
 | `vlm.jpeg_quality` | `80` | JPEG 壓縮品質 |
@@ -267,6 +267,20 @@ handoff_ms  = 建 target + 在目前這一幀驗證的時間
 - 1～2 個目標時，三種模式框出來的位置幾乎一樣（差幾個 px），`fast` 可用。
 - 15 個目標時 `fast` 壞掉：回傳 `[0, 234, 640, 355]`，一條橫跨整張圖的框，不是單一隻狗；`slow` 和 `hybrid` 都正確框住其中一隻。
 - `hybrid` 在 15 個目標時反而比 1 個目標快（4.25 s vs 6.90 s），這點還沒有解釋，樣本只有 3 張圖。
+
+### WiFi 端到端實測（2026-09-18，`LA_MODE=fast`，one-dog 640×656 JPEG q80 44 KB，8 次）
+
+| 指標 | p50 | min | max |
+|---|---:|---:|---:|
+| `rtt_ms`（client 送出到收到） | 3444 | 3438 | 3714 |
+| `server_ms` | 3408 | 3404 | 3411 |
+| `network_ms`（= rtt − server） | **36** | 27 | 307 |
+
+`ping` 型別的來回延遲（不含推論，20 次）：p50 **4.4 ms**、max 16.4 ms。
+
+- 網路只佔總延遲約 1%，**瓶頸完全在 VLM 推論**。
+- `network_ms` 偶發衝到 307 ms，應是 WiFi 抖動；逾時要照 max 而不是 p50 設。
+- 兩台機器在同一個 WiFi AP 下。上機器人實測前這組數字只能當下界。
 
 SAM2 mask 的額外成本（另一組測試，`--mask`，SAM 輸入 1024）：暖機後約 0.60–0.63 秒，第一次呼叫約 2.3 秒。
 
