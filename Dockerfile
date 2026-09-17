@@ -29,6 +29,8 @@ COPY app /app/app
 COPY scripts /app/scripts
 COPY tests /app/tests
 COPY npu /app/npu
+COPY vlm_server /app/vlm_server
+COPY tools /app/tools
 RUN pip check && pip freeze > /opt/python-packages.txt
 ENV LOCATE_LIBRARY=/opt/locate/liblocate_anything.so
 CMD ["python", "-m", "app.server"]

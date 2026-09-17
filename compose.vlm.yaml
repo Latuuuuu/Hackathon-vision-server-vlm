@@ -1,0 +1,17 @@
+# VLM target server (no camera). Use together with the base files:
+#   docker compose -f compose.yaml -f compose.rocm.yaml -f compose.vlm.yaml up -d tracker
+services:
+  tracker:
+    image: locate-sam2:rocm10-vlm
+    command: [python, -m, vlm_server.main]
+    # Client (orb_tracker_node) and upstream description node reach this over WiFi.
+    ports: !override
+      - "5555:5555"
+      - "8080:8080"
+    environment:
+      VLM_ZMQ_BIND: tcp://*:5555
+      VLM_HTTP_PORT: "8080"
+      VLM_RETURN_MASK: ${VLM_RETURN_MASK:-0}
+      VLM_SAM_IMAGE_SIZE: ${VLM_SAM_IMAGE_SIZE:-1024}
+      VLM_INITIAL_QUERY: ${VLM_INITIAL_QUERY:-}
+    restart: unless-stopped

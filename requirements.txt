@@ -4,3 +4,4 @@ Pillow>=10,<13
 Flask>=3.0,<4
 waitress>=3,<4
 pyrealsense2>=2.55,<3
+pyzmq>=25,<28
