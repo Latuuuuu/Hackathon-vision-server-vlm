@@ -1,23 +1,23 @@
 # VLM Target 傳輸介面
 
-> 狀態：**規劃中，client 與 server 都還沒實作**。下面的預設值（port、逾時、縮圖寬度等）是暫定值，要等實測來回延遲後再調整。
+> 狀態：**server 已實作（`vlm_server/`），client 還沒實作**。server 已通過本機單元測試與 mock 測試，尚未在 GPU 主機上實測延遲。下面的預設值（port、逾時、縮圖寬度等）是暫定值，要等實測來回延遲後再調整。
 
 ## 1. 流程總覽
 
 ```
-上級描述 node ──► server（保存目前的描述，編 query_version）
+上級描述 node ──HTTP──► server（保存目前的描述，編 query_version）
                     ▲                 │
-      ① JPEG + id   │                 │ ② mask + id + query_version
+      ① JPEG + id   │                 │ ② bbox（+ 選配 mask）+ id + query_version
                     │                 ▼
 client (orb_tracker_node)
   ├─ 送圖時把那一幀（灰階、深度、當下 TF）存進本地快取
   ├─ 等待期間繼續用舊 target 追蹤
-  └─ mask 回來：從快取取出同一幀 → 用 mask 建新 target → 在「現在這一幀」確認後才替換
+  └─ bbox 回來：從快取取出同一幀 → 在 bbox 內用深度找出物件範圍建新 target → 在「現在這一幀」確認後才替換
 ```
 
 設計原則：
 
-- **server 只回傳 mask，不回傳圖片。** client 手上已經有送出去的那一幀，只需要知道物件在哪裡。
+- **server 預設只回傳 bbox 兩個角點，不回傳圖片。** client 手上已經有送出去的那一幀和深度，由下游自己用深度切出物件。SAM2 mask 是選配（server 設 `VLM_RETURN_MASK=1`），用來和深度切割結果比較。
 - **不需要兩台機器的時鐘同步。** 用 `request_id` 對應請求和回應，時間一律用 client 的時鐘量。
 - **同一時間只有一筆請求在路上。** 避免 WiFi 變慢時請求越堆越多，延遲越來越大。
 
@@ -74,16 +74,17 @@ DEALER 送出時**不加**空的分隔 frame（這點和 REQ 不同）。
 | 方向 | 在 client 端看到的 frame | 在 server ROUTER 看到的 frame |
 |---|---|---|
 | request | `[header, jpeg]` | `[identity, header, jpeg]` |
-| response（FOUND） | `[header, mask_png]` | server 送出時為 `[identity, header, mask_png]` |
-| response（其他） | `[header]` | server 送出時為 `[identity, header]` |
+| response（FOUND 且 `has_mask`） | `[header, mask_png]` | server 送出時為 `[identity, header, mask_png]` |
+| response（其他，含預設的 FOUND） | `[header]` | server 送出時為 `[identity, header]` |
 
 ## 3. 網路與 port 設定
 
 | 項目 | 預設 | 說明 |
 |---|---|---|
-| Port | `5555/tcp` | client 參數 `vlm.endpoint` 可以改 |
-| Server IP | 待定 | 建議在 WiFi AP 上固定 IP，或在 router 設 DHCP 保留 |
-| 防火牆 | server 要開放 `5555/tcp` 入站 | 例如 `sudo ufw allow 5555/tcp` |
+| Port | `5555/tcp` | client 參數 `vlm.endpoint` 可以改；server 端 `VLM_ZMQ_BIND` |
+| 描述 API port | `8080/tcp` | HTTP，見 4.5；server 端 `VLM_HTTP_PORT` |
+| Server IP | 暫定 Hackathon-gpu `192.168.50.125` | 建議在 WiFi AP 上固定 IP，或在 router 設 DHCP 保留 |
+| 防火牆 | server 要開放 `5555/tcp`、`8080/tcp` 入站 | 例如 `sudo ufw allow 5555/tcp` |
 | Docker | client container 已經是 `network_mode: host`，不需要另外映射 port | server 若跑在 container 裡要映射或用 host 網路 |
 | ROS_DOMAIN_ID | 不受影響 | 這條連線不走 DDS |
 
@@ -126,8 +127,10 @@ DEALER 送出時**不加**空的分隔 frame（這點和 REQ 不同）。
   "request_id": 42,
   "status": "FOUND",
   "query_version": 3,
-  "bbox": [212, 98, 120, 160],
-  "score": 0.87,
+  "bbox": [212, 98, 332, 258],
+  "score": -1.0,
+  "num_candidates": 1,
+  "has_mask": false,
   "server_ms": 850,
   "error": ""
 }
@@ -137,16 +140,19 @@ DEALER 送出時**不加**空的分隔 frame（這點和 REQ 不同）。
 |---|---|---|
 | `request_id` | uint32 | 照抄 request 的值 |
 | `status` | string | 見下表 |
-| `query_version` | int | server 目前的描述版本。描述每換一次就加 1 |
-| `bbox` | `[x, y, w, h]` int | **上傳影像的座標**。只有 `FOUND` 時有效 |
-| `score` | float | VLM 或分割結果的信心值，0～1。只有 `FOUND` 時有效 |
+| `query_version` | int | 這筆結果是用哪一版描述算的。描述每換一次就加 1 |
+| `bbox` | `[x1, y1, x2, y2]` int 或 `null` | 左上與右下角點，**上傳影像的座標**，`x2`/`y2` 不含（寬 = `x2 − x1`）。只有 `FOUND` 時有值 |
+| `score` | float | 有 mask 時是 SAM2 預測的 IoU（0～1）；沒有 mask 時固定 `-1`（LocateAnything 不提供信心值） |
+| `num_candidates` | int | VLM 找到幾個符合描述的物件 |
+| `has_mask` | bool | 是否附第二個 frame（mask PNG） |
 | `server_ms` | int | server 從收到 request 到送出 response 花了多少毫秒 |
 | `error` | string | `ERROR` 時放錯誤訊息，其他狀態是空字串 |
 
-第二個 frame（只有 `FOUND` 時有）：mask PNG
-- 單通道 8-bit，大小正好是 `w × h`（bbox 範圍，不是整張圖）。
+有多個候選物件時只回一個：沒開 mask 時取 VLM 輸出的第一個；開 mask 時取 SAM2 分數最高的。
+
+第二個 frame（只有 `has_mask: true` 時有）：mask PNG
+- 單通道 8-bit，大小正好是 `(x2 − x1) × (y2 − y1)`（bbox 範圍，不是整張圖）。
 - 物件是 `255`，背景是 `0`。
-- 有多個候選物件時，只回傳分數最高的那一個。
 
 | `status` | 意義 | client 的處理 |
 |---|---|---|
@@ -160,10 +166,12 @@ DEALER 送出時**不加**空的分隔 frame（這點和 REQ 不同）。
 `type: "ping"` 只有 header，沒有影像。server 立刻回傳：
 
 ```json
-{"protocol_version": 1, "request_id": 43, "status": "PONG", "query_version": 3, "server_ms": 0, "error": ""}
+{"protocol_version": 1, "request_id": 43, "status": "PONG", "query_version": 3, "bbox": null, "score": -1.0, "num_candidates": 0, "has_mask": false, "server_ms": 0, "error": ""}
 ```
 
 用途有兩個：一是量 WiFi 的來回延遲，不包含 VLM 推論時間；二是在沒有追蹤需求時，也能提早發現 `query_version` 改變。
+
+server 在推論期間也會立刻回 `PONG`、`NO_QUERY`，以及模型還在載入時的 `ERROR`（`error: "model loading"`），這三種不必排隊等推論。
 
 ### 4.4 座標換算（client 端）
 
@@ -173,6 +181,23 @@ DEALER 送出時**不加**空的分隔 frame（這點和 REQ 不同）。
 
 server 不需要知道相機的原始解析度。
 
+### 4.5 上級描述 API（暫定：HTTP）
+
+上級描述 node 還沒定案，目前先用 HTTP（走 WiFi）。之後若改成 ROS 2，只要把這一層換掉，ZMQ 協定不變。
+
+| 方法 | 路徑 | Body | 回傳 |
+|---|---|---|---|
+| `POST` | `/api/query` | `{"text": "the red cup"}`（1～300 字） | `{"text", "query_version"}`；文字和目前相同時版本不變 |
+| `DELETE` | `/api/query` | — | 清空描述，版本 +1；之後 detect 回 `NO_QUERY` |
+| `GET` | `/api/query` | — | 目前的 `{"text", "query_version"}` |
+| `GET` | `/api/status` | — | 模型狀態、最近 50 筆的 `locate_ms` / `sam_ms` / `server_ms`、被丟棄的舊請求數 |
+
+```bash
+curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/json' -d '{"text":"the red cup"}'
+```
+
+`query_version` 在 server 重啟後會從 0 重新開始。
+
 ## 5. 時間差處理（client 端）
 
 | 情況 | 處理 |
@@ -180,7 +205,7 @@ server 不需要知道相機的原始解析度。
 | 送圖 | 那一幀的灰階、深度，以及 camera→map TF 存進快取（最多 `vlm.cache_size` 幀）。TF 在送圖當下就存，因為 tf2 buffer 預設只保留 10 秒 |
 | 等待中 | 繼續用舊 target 追蹤，不阻塞影像 callback（網路收發在背景 thread 處理） |
 | 逾時（超過 `vlm.timeout_s`） | 放棄這一筆，允許送下一張。之後如果舊的回應才到，`request_id` 對不上就丟棄 |
-| 收到 `FOUND` | 用快取裡那一幀加上 mask 建新 target：ORB 只在 mask（內縮幾 px）內抽特徵，發布點改用 mask 質心 |
+| 收到 `FOUND` | 用快取裡那一幀加上 bbox 建新 target：在 bbox 內用深度切出物件範圍（有附 mask 時可改用或對照 mask），ORB 只在該範圍（內縮幾 px）內抽特徵，發布點改用範圍質心 |
 | 新 target 驗證 | 先在「現在這一幀」偵測，成功才替換；失敗就保留舊 target，再試 N 幀 |
 | `query_version` 改變 | 描述換了，舊 target 立刻作廢，馬上送圖 |
 
@@ -229,7 +254,7 @@ handoff_ms  = 建 target + 在目前這一幀驗證的時間
 
 ## 9. 開發順序建議
 
-1. **mock server**（Python + pyzmq）：照這份協定回傳固定的 bbox 和 mask，或開視窗用滑鼠框選。可以加人工延遲和隨機不回應，模擬 WiFi。這樣 client 不必等真的 VLM 就能開發。
+1. **mock server**（已完成）：`python -m tools.mock_server --query "cup" --delay 0.8 --drop-rate 0.1 [--mask]`，回傳置中或 `--bbox` 指定的框，可加人工延遲和隨機不回應，模擬 WiFi。`python -m tools.test_client` 可以拿來對照 client 行為。
 2. **client 網路 thread + 快取 + 逾時**，先用 `ping` 驗證連線。
 3. **handoff**：用 mask 建 target，驗證後替換。
 4. 接上真的 server，實測延遲後調整參數。
@@ -237,5 +262,6 @@ handoff_ms  = 建 target + 在目前這一幀驗證的時間
 ## 10. 相依套件與待確認事項
 
 - client 的 Dockerfile 要加 `libzmq3-dev`。C++ header 版的 cppzmq 在 Ubuntu 22.04 的 apt 套件名稱還沒查證，找不到的話直接用 libzmq 的 C API。
-- server 需要 `pyzmq`（假設 server 用 Python）。
-- 待和 server 端約定：server IP、port、VLM 的輸入尺寸、`query_version` 的產生方式。
+- server 是 Python，用 `pyzmq`（已加進 requirements.txt）。
+- 已約定：port 5555（ZMQ）/ 8080（HTTP 描述）、`query_version` 由 server 在描述改變時遞增、bbox 用 `[x1, y1, x2, y2]`。
+- 待確認：server 正式 IP、VLM 實際推論時間（決定 `vlm.timeout_s`）、上級描述最終走 HTTP 還是 ROS 2。
