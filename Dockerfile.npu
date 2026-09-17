@@ -1,0 +1,16 @@
+FROM ubuntu:24.04
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv python3-dev build-essential ca-certificates pciutils libglib2.0-0 libgl1 libgomp1 libboost-filesystem1.83.0 && rm -rf /var/lib/apt/lists/*
+# Supply official AMD Linux SDK and matching XRT user-space packages locally.
+# Do NOT place the amdxdna kernel-driver/plugin deb here; install that on host.
+COPY vendor/xrt/ /tmp/xrt/
+RUN apt-get update && apt-get install -y /tmp/xrt/*.deb && rm -rf /var/lib/apt/lists/* /tmp/xrt
+COPY vendor/ryzen_ai-1.8.0.tgz /tmp/ryzen_ai.tgz
+RUN mkdir -p /opt/ryzen-installer && tar -xzf /tmp/ryzen_ai.tgz -C /opt/ryzen-installer && rm /tmp/ryzen_ai.tgz
+RUN bash -eu -c 'mapfile -t installers < <(find /opt/ryzen-installer -name install_ryzen_ai.sh); test "${#installers[@]}" -eq 1; cd "$(dirname "${installers[0]}")"; bash ./install_ryzen_ai.sh -a yes -p /opt/ryzen-ai/venv'
+RUN /opt/ryzen-ai/venv/bin/python -m pip install --no-cache-dir 'Flask>=3,<4' 'waitress>=3,<4'
+WORKDIR /app
+COPY npu /app/npu
+ENV PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
+ENTRYPOINT ["bash", "/app/npu/entrypoint.sh"]
+CMD ["python", "-m", "npu.server"]

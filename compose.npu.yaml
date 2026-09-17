@@ -1,0 +1,25 @@
+services:
+  tracker:
+    environment:
+      SAM_ENCODER_URL: http://npu-encoder:8090
+    depends_on:
+      npu-encoder:
+        condition: service_healthy
+  npu-encoder:
+    build:
+      context: .
+      dockerfile: Dockerfile.npu
+    image: locate-sam2:npu-encoder-v2
+    init: true
+    devices:
+      - /dev/accel/accel0:/dev/accel/accel0
+    volumes:
+      - ./output/encoder:/encoder:ro
+      - ./output/npu-cache:/cache
+    healthcheck:
+      test: [CMD, /opt/ryzen-ai/venv/bin/python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health',timeout=5)"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 30m
+    restart: "no"

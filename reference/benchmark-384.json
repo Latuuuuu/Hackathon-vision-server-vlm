@@ -1,0 +1,332 @@
+{
+  "backend": {
+    "device": "cuda",
+    "torch": "2.13.0+rocm10.0.0",
+    "hip": "7.15.26333",
+    "gpu": "AMD Radeon 860M Graphics",
+    "precision": "fp16 autocast",
+    "model": "SAM-2.1 Hiera Tiny",
+    "memory_frames": 6,
+    "image_size": 384,
+    "attention_memory_frames": 3,
+    "object_pointers": 4,
+    "profile": true,
+    "experimental_attention": "0",
+    "gpu_probe": {
+      "device": "AMD Radeon 860M Graphics",
+      "arch": "gfx1152",
+      "compiled": [
+        "gfx1010",
+        "gfx1011",
+        "gfx1012",
+        "gfx1030",
+        "gfx1031",
+        "gfx1032",
+        "gfx1033",
+        "gfx1034",
+        "gfx1035",
+        "gfx1036",
+        "gfx1100",
+        "gfx1101",
+        "gfx1102",
+        "gfx1103",
+        "gfx1200",
+        "gfx1201",
+        "gfx1150",
+        "gfx1151",
+        "gfx1152",
+        "gfx1153",
+        "gfx908",
+        "gfx90a",
+        "gfx942",
+        "gfx950",
+        "gfx1250"
+      ],
+      "torch": "2.13.0+rocm10.0.0",
+      "hip": "7.15.26333"
+    },
+    "encoder_backend": "pytorch"
+  },
+  "frames": [
+    {
+      "frame": 0,
+      "step_ms": 2021.8967159744352,
+      "mask_pixels": 16846,
+      "stage_ms": {
+        "image_encoder_ms": 984.0201416015625,
+        "memory_attention_ms": 0.02148200012743473,
+        "mask_decoder_ms": 474.8938293457031,
+        "memory_encoder_ms": 551.9692993164062
+      }
+    },
+    {
+      "frame": 1,
+      "step_ms": 91.18521097116172,
+      "mask_pixels": 16899,
+      "stage_ms": {
+        "image_encoder_ms": 52.165008544921875,
+        "memory_attention_ms": 13.761383056640625,
+        "mask_decoder_ms": 17.118188858032227,
+        "memory_encoder_ms": 3.1358389854431152
+      }
+    },
+    {
+      "frame": 2,
+      "step_ms": 79.09841102082282,
+      "mask_pixels": 16874,
+      "stage_ms": {
+        "image_encoder_ms": 50.94565200805664,
+        "memory_attention_ms": 16.694364547729492,
+        "mask_decoder_ms": 3.886660099029541,
+        "memory_encoder_ms": 3.016669988632202
+      }
+    },
+    {
+      "frame": 3,
+      "step_ms": 82.79222098644823,
+      "mask_pixels": 16887,
+      "stage_ms": {
+        "image_encoder_ms": 50.95801544189453,
+        "memory_attention_ms": 20.34725570678711,
+        "mask_decoder_ms": 3.8779640197753906,
+        "memory_encoder_ms": 3.064202070236206
+      }
+    },
+    {
+      "frame": 4,
+      "step_ms": 82.75604108348489,
+      "mask_pixels": 16907,
+      "stage_ms": {
+        "image_encoder_ms": 50.942962646484375,
+        "memory_attention_ms": 20.346532821655273,
+        "mask_decoder_ms": 3.8627750873565674,
+        "memory_encoder_ms": 3.0105791091918945
+      }
+    },
+    {
+      "frame": 5,
+      "step_ms": 83.1359310541302,
+      "mask_pixels": 16929,
+      "stage_ms": {
+        "image_encoder_ms": 51.08845901489258,
+        "memory_attention_ms": 20.429292678833008,
+        "mask_decoder_ms": 3.890065908432007,
+        "memory_encoder_ms": 3.0365889072418213
+      }
+    },
+    {
+      "frame": 6,
+      "step_ms": 82.95065502170473,
+      "mask_pixels": 16930,
+      "stage_ms": {
+        "image_encoder_ms": 51.19855880737305,
+        "memory_attention_ms": 20.390792846679688,
+        "mask_decoder_ms": 3.842057943344116,
+        "memory_encoder_ms": 3.0574309825897217
+      }
+    },
+    {
+      "frame": 7,
+      "step_ms": 82.56397303193808,
+      "mask_pixels": 16921,
+      "stage_ms": {
+        "image_encoder_ms": 50.62569046020508,
+        "memory_attention_ms": 20.498863220214844,
+        "mask_decoder_ms": 3.8912289142608643,
+        "memory_encoder_ms": 3.0414769649505615
+      }
+    },
+    {
+      "frame": 8,
+      "step_ms": 82.68171898089349,
+      "mask_pixels": 16917,
+      "stage_ms": {
+        "image_encoder_ms": 50.97048568725586,
+        "memory_attention_ms": 20.314069747924805,
+        "mask_decoder_ms": 3.883815050125122,
+        "memory_encoder_ms": 3.044804096221924
+      }
+    },
+    {
+      "frame": 9,
+      "step_ms": 82.8583890106529,
+      "mask_pixels": 16929,
+      "stage_ms": {
+        "image_encoder_ms": 51.188865661621094,
+        "memory_attention_ms": 20.214799880981445,
+        "mask_decoder_ms": 3.885617971420288,
+        "memory_encoder_ms": 3.037390947341919
+      }
+    },
+    {
+      "frame": 10,
+      "step_ms": 83.0125940265134,
+      "mask_pixels": 16929,
+      "stage_ms": {
+        "image_encoder_ms": 51.026092529296875,
+        "memory_attention_ms": 20.439472198486328,
+        "mask_decoder_ms": 3.8891849517822266,
+        "memory_encoder_ms": 3.05426287651062
+      }
+    },
+    {
+      "frame": 11,
+      "step_ms": 82.70190795883536,
+      "mask_pixels": 16941,
+      "stage_ms": {
+        "image_encoder_ms": 50.66100311279297,
+        "memory_attention_ms": 20.425203323364258,
+        "mask_decoder_ms": 3.9106669425964355,
+        "memory_encoder_ms": 2.998194932937622
+      }
+    },
+    {
+      "frame": 12,
+      "step_ms": 83.57888099271804,
+      "mask_pixels": 16925,
+      "stage_ms": {
+        "image_encoder_ms": 51.098270416259766,
+        "memory_attention_ms": 20.456024169921875,
+        "mask_decoder_ms": 3.8980419635772705,
+        "memory_encoder_ms": 2.9984350204467773
+      }
+    },
+    {
+      "frame": 13,
+      "step_ms": 83.20816699415445,
+      "mask_pixels": 16957,
+      "stage_ms": {
+        "image_encoder_ms": 50.893775939941406,
+        "memory_attention_ms": 20.492292404174805,
+        "mask_decoder_ms": 3.8963189125061035,
+        "memory_encoder_ms": 3.072176933288574
+      }
+    },
+    {
+      "frame": 14,
+      "step_ms": 82.49186200555414,
+      "mask_pixels": 16976,
+      "stage_ms": {
+        "image_encoder_ms": 50.67256546020508,
+        "memory_attention_ms": 20.41230010986328,
+        "mask_decoder_ms": 3.863374948501587,
+        "memory_encoder_ms": 3.0544230937957764
+      }
+    },
+    {
+      "frame": 15,
+      "step_ms": 83.17734696902335,
+      "mask_pixels": 16946,
+      "stage_ms": {
+        "image_encoder_ms": 51.39674377441406,
+        "memory_attention_ms": 20.343368530273438,
+        "mask_decoder_ms": 3.8969199657440186,
+        "memory_encoder_ms": 3.0569469928741455
+      }
+    },
+    {
+      "frame": 16,
+      "step_ms": 82.37121999263763,
+      "mask_pixels": 16985,
+      "stage_ms": {
+        "image_encoder_ms": 50.65924835205078,
+        "memory_attention_ms": 20.270788192749023,
+        "mask_decoder_ms": 3.8812499046325684,
+        "memory_encoder_ms": 3.049813985824585
+      }
+    },
+    {
+      "frame": 17,
+      "step_ms": 83.37862405460328,
+      "mask_pixels": 16971,
+      "stage_ms": {
+        "image_encoder_ms": 51.41464614868164,
+        "memory_attention_ms": 20.33009910583496,
+        "mask_decoder_ms": 3.9039740562438965,
+        "memory_encoder_ms": 3.0185940265655518
+      }
+    },
+    {
+      "frame": 18,
+      "step_ms": 83.22588098235428,
+      "mask_pixels": 17009,
+      "stage_ms": {
+        "image_encoder_ms": 51.27080154418945,
+        "memory_attention_ms": 20.47333526611328,
+        "mask_decoder_ms": 3.8819708824157715,
+        "memory_encoder_ms": 3.0700130462646484
+      }
+    },
+    {
+      "frame": 19,
+      "step_ms": 83.64062698092312,
+      "mask_pixels": 16974,
+      "stage_ms": {
+        "image_encoder_ms": 51.73838806152344,
+        "memory_attention_ms": 20.395185470581055,
+        "mask_decoder_ms": 3.893272876739502,
+        "memory_encoder_ms": 3.0740609169006348
+      }
+    },
+    {
+      "frame": 20,
+      "step_ms": 83.05480307899415,
+      "mask_pixels": 16926,
+      "stage_ms": {
+        "image_encoder_ms": 51.3444709777832,
+        "memory_attention_ms": 20.27098846435547,
+        "mask_decoder_ms": 3.8582448959350586,
+        "memory_encoder_ms": 3.052659034729004
+      }
+    },
+    {
+      "frame": 21,
+      "step_ms": 82.95005094259977,
+      "mask_pixels": 16911,
+      "stage_ms": {
+        "image_encoder_ms": 50.934547424316406,
+        "memory_attention_ms": 20.363605499267578,
+        "mask_decoder_ms": 3.8901469707489014,
+        "memory_encoder_ms": 3.0576300621032715
+      }
+    },
+    {
+      "frame": 22,
+      "step_ms": 82.83441001549363,
+      "mask_pixels": 16879,
+      "stage_ms": {
+        "image_encoder_ms": 50.70151901245117,
+        "memory_attention_ms": 20.512451171875,
+        "mask_decoder_ms": 3.8681039810180664,
+        "memory_encoder_ms": 3.0474889278411865
+      }
+    },
+    {
+      "frame": 23,
+      "step_ms": 83.28172797337174,
+      "mask_pixels": 16887,
+      "stage_ms": {
+        "image_encoder_ms": 51.32303237915039,
+        "memory_attention_ms": 20.443359375,
+        "mask_decoder_ms": 3.8835339546203613,
+        "memory_encoder_ms": 3.0541419982910156
+      }
+    },
+    {
+      "frame": 24,
+      "step_ms": 83.0690290313214,
+      "mask_pixels": 16907,
+      "stage_ms": {
+        "image_encoder_ms": 51.281646728515625,
+        "memory_attention_ms": 20.259685516357422,
+        "mask_decoder_ms": 3.8487870693206787,
+        "memory_encoder_ms": 3.068449020385742
+      }
+    }
+  ],
+  "warmup_excluded": 8,
+  "steady_p50_ms": 83.06191605515778,
+  "steady_p95_ms": 83.59431748976931,
+  "steady_fps": 12.040617327750223,
+  "note": "Synthetic model-only benchmark; not camera FPS or mask-quality validation"
+}

@@ -1,0 +1,40 @@
+services:
+  tracker:
+    build:
+      context: .
+      args:
+        TORCH_INDEX: https://download.pytorch.org/whl/cpu
+    image: locate-sam2:cpu-v3
+    init: true
+    privileged: true
+    shm_size: 2gb
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+      - /dev/dri:/dev/dri
+      - ${LOCATE_MODELS_DIR:-./models}:/models:ro
+      - ./output:/output
+    environment:
+      SAM_DEVICE: cpu
+      SAM_CHECKPOINT: /models/sam2.1_hiera_tiny.pt
+      LOCATE_MODEL: /models/locate-anything-q8_0.gguf
+      CPU_THREADS: "6"
+      LA_MODE: slow
+      LA_DEVICE: ${LA_DEVICE:-Vulkan0}
+      CAMERA_WIDTH: "640"
+      CAMERA_HEIGHT: "480"
+      CAMERA_FPS: "30"
+      HISTORY_SECONDS: "30"
+      HISTORY_FPS: "5"
+      SAM_IMAGE_SIZE: ${SAM_IMAGE_SIZE:-512}
+      SAM_MEMORY_FRAMES: ${SAM_MEMORY_FRAMES:-3}
+      SAM_OBJECT_POINTERS: ${SAM_OBJECT_POINTERS:-4}
+      SAM_PROFILE: ${SAM_PROFILE:-1}
+    restart: "no"
+  models:
+    image: locate-sam2:cpu-v3
+    profiles: [tools]
+    volumes:
+      - ${LOCATE_MODELS_DIR:-./models}:/models
+    entrypoint: [python, /app/scripts/download_models.py]

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Locate → SAM-2 實機測試</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101620;color:#edf4ff}body{max-width:1400px;margin:32px auto;padding:0 20px}h1{font-size:26px}p{color:#b9c7da;line-height:1.7}button,input{padding:12px;border:1px solid #526174;border-radius:8px;background:#253249;color:white;font-size:16px}input{flex:1;min-width:180px}button{cursor:pointer}button:hover{background:#3b5276}.controls{display:flex;gap:10px;flex-wrap:wrap}.views{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px}article,.metrics{background:#192333;padding:16px;border-radius:12px}img{width:100%;min-height:160px;object-fit:contain;background:#080c13}h2{font-size:18px}#state{color:#77e7b4}#error{color:#ffb1a5;white-space:pre-wrap}.metrics{margin-top:20px;display:grid;grid-template-columns:repeat(4,1fr);gap:18px}.value{font-size:24px;display:block;margin-top:5px}small{color:#b9c7da}#candidates{margin-top:20px}#candidate{max-width:640px}pre{white-space:pre-wrap;overflow-wrap:anywhere}a{color:#9ed2ff}.stale{color:#ffcc77}#tracked.hidden{visibility:hidden}@media(max-width:750px){.views{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}}
+</style></head><body>
+<h1>LocateAnything → SAM-2.1 Tiny · V3 低延遲</h1>
+<p>先讓物體靜止，輸入描述並定位；開始追蹤後再移動物體。綠色只覆蓋 SAM-2 判定的物體像素。右側顯示完成推論的原始時間點，速度可能慢於相機。</p>
+<div class="controls"><input id="target" placeholder="例如：the red cup" value="the red cup"><button id="detect">定位並追蹤</button><button id="stop">停止</button><a href="/api/log.csv">下載 CSV</a></div>
+<p>狀態：<strong id="state">連線中</strong>　<span id="age"></span></p><div id="error"></div>
+<div class="views"><article><h2>相機即時畫面</h2><img id="raw" alt="等待 D435i 畫面"></article><article><h2>實際完成的 SAM-2 遮罩</h2><img id="tracked" class="hidden" alt="等待追蹤結果"></article></div>
+<div class="metrics" id="metrics"></div>
+<section id="candidates" hidden><h2>選擇要持續追蹤的那一個</h2><p>下圖是定位使用的歷史影格。多個相同物體請按編號選定。</p><img id="candidate" alt="定位候選"><div id="choices" class="controls"></div></section>
+<details><summary>執行裝置與完整診斷</summary><pre id="details"></pre></details>
+<script src="/static/viewer.js?v=3"></script></body></html>
