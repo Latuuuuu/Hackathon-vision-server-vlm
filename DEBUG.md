@@ -122,8 +122,23 @@ curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/
   --image <現場拍的照片>.jpg --count 3 --timeout 20 --out overlay.jpg
 ```
 
-通過條件：`FOUND`、`overlay.jpg` 裡的框貼著目標物、`server_ms` 約 3400（`fast`）。
+通過條件：`FOUND`、`overlay.jpg` 裡的框貼著目標物、`server_ms` 約 2400～3400（`fast`）。
 **請用現場的目標物和背景拍一張來測**，不要只用狗的照片；VLM 對描述用詞很敏感。
+
+注意：
+- **先 `POST` 描述再送圖**。server 上可能還留著之前測試的描述，直接送圖只會拿到 `NOT_FOUND`。
+- **同一時間只讓一個 client 送圖**。server 一次只做一筆推論，兩個 client 同時送會輪流排隊，
+  `server_ms` 會包含排隊時間而變成約兩倍。判斷推論本身快不快，要看 `/api/status` 裡的 `locate_ms`。
+
+結果（2026-09-19，`test.png` 598×472，實驗室桌面，`fast`，各 3 次）：
+
+| 描述 | bbox | 判讀 | `locate_ms` |
+|---|---|---|---:|
+| `the paper cup` | `[128, 316, 246, 446]` | 貼住前景紙杯 | 2351～2360 |
+| `the water bottle` | `[279, 199, 344, 383]` | 貼住前景水瓶，沒有選到右後方的果汁瓶 | 2351～2360 |
+
+同一張圖、同一個描述，三次的框完全一樣。現場照片的推論（約 2.35 秒）比狗的測試圖（約 3.41 秒）快。
+測試時剛好有兩個 client 同時送圖，`server_ms` 出現約 4.6 秒的值，但 `locate_ms` 一直穩定在 2.35 秒，確認是排隊造成的。
 
 ### L3：Pi bridge 接真 server
 
@@ -172,6 +187,7 @@ curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/
 | 一直收到 `NO_QUERY` | 沒設描述，或 server 重啟後描述消失 | `curl http://192.168.50.125:8080/api/query`，`text` 是 `null` 就重設 |
 | 一直收到 `ERROR: model loading` | 模型還在載入，或載入失敗 | `/api/status` 的 `model_error`；`docker logs --tail 100 vlm-server-tracker-1` |
 | `ERROR: image larger than 1280px` | client 沒縮圖 | client 的 `vlm.upload_max_width` 要是 640 |
+| `server_ms` 忽高忽低，大約是兩倍，但 `/api/status` 的 `locate_ms` 很穩定 | 有其他 client 同時在送圖，請求在排隊 | 看 `recent` 裡有沒有交錯的 request_id；聯測時關掉筆電上的 `test_client` |
 | `server_ms` 突然從 3.4 秒跳到 7～10 秒 | `LA_MODE` 變成 `slow`／`hybrid`，或 GPU 被其他程式占用 | `/api/status` 的 `model_info.la_mode`；`docker ps` 看有沒有其他容器 |
 | `network_ms` 偶發 100～300 ms 尖峰 | WiFi 抖動或 Pi 的 WiFi 省電 | 見 L1 的說明；在 3.4 秒面前影響不大 |
 | `FOUND` 但框很寬、橫跨整張圖 | `fast` 模式遇到大量同類物件（實測 15 隻狗時會出現） | 換 `LA_MODE=hybrid`（第 5 節）；client `timeout_s` 要一起改成 12.0 |
