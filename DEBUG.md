@@ -14,7 +14,7 @@
 | 模型 | 就緒，`LA_MODE=fast`，只回 bbox | `/api/status`：`model_ready: true` |
 | Pi → server 連線 | 通 | Pi（`192.168.50.67`，wlan0）連得到 `tcp 5555`，`GET /api/query` 正常 |
 | Pi → server ZMQ ping | p50 **9.0 ms**、p90 12.6 ms、max 111.7 ms（30 次） | 從 Pi 的 `hackathon-vision-client-ws` 容器內量測 |
-| Pi 的 bridge | **目前接的是 Pi 自己的 mock** | `vlm_bridge.launch.py vlm.endpoint:=tcp://127.0.0.1:5555`；server 端沒有收到任何 Pi 的請求 |
+| Pi 的 bridge | 已接真 server（L3 通過，見第 3 節） | `vlm_bridge.launch.py vlm.endpoint:=tcp://192.168.50.125:5555`，mock 已關閉 |
 
 也就是說，**server 端不需要再部署**。剩下的是把 Pi bridge 的 endpoint 換成真的 server，然後照第 3 節一層一層驗證。
 
@@ -158,6 +158,24 @@ curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/
 - client 每 2 秒的延遲統計中，`server_ms` 約 3400、`network_ms` 在 100 ms 以內、沒有逾時。
 - tracker 建出 target，`/tracked_object/point` 指在目標物上。
 
+結果（2026-09-19 09:49～10:30 UTC，實驗室，Pi 5 走 WiFi，`fast`，只回 bbox）：
+
+| 項目 | 數值 |
+|---|---|
+| detect 結果 | `FOUND` 290、`NO_QUERY` 11、`NOT_FOUND` 4、`TIMEOUT` 1 |
+| `rtt_ms`（296 筆有推論的） | p50 1988、p95 2054、p99 2101、max 2826 |
+| `server_ms` | p50 1883、p99 1894、max 1914（極穩定） |
+| `network_ms` | p50 **103**、p95 170、p99 218、max 944（超過 200 ms 共 6 次） |
+| server `dropped_requests` | 0 |
+| tracker 畫面 | `TRACKING OK KLT`，134 點全部 inlier，每幀 6.8 ms，距離 0.329 m |
+
+- 相機是 848×480，縮成 640×362 上傳。推論 1.88 秒，比 L2 的 598×472 圖（2.35 秒）快。
+- `rtt` 最大 2.8 秒，`timeout_s = 6.0` 餘裕足夠。
+- `network_ms` p50 103 ms，比 L1 的 ZMQ ping（約 10 ms）和筆電 WiFi（36 ms）都高。
+  可能原因是 detect 每 8 秒才送一次，WiFi 省電讓網卡在空檔睡著；也可能是 Pi 5 的上傳頻寬比較差。**還沒驗證**。
+  只佔總延遲約 5%，不急著處理。
+- 唯一一次 `TIMEOUT` 發生在 09:57:40，正好是 server 在 09:57:36 被重啟的時候。在路上的那筆請求遺失，client 照設計逾時後繼續。
+
 ### L4：失敗情境
 
 照 client 和 mock 測過的情境，在真 server 上重跑一次：
@@ -169,6 +187,16 @@ curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/
 | server 重啟 | `ssh Hackathon-gpu 'docker restart vlm-server-tracker-1'` | 模型載入期間 client 收到 `ERROR`（`model loading`）；之後因為描述消失而收到 `NO_QUERY`，**要重設描述** |
 | 目標不在畫面 | 把目標物拿走 | `NOT_FOUND`，tracker 繼續追舊 target |
 | 斷網 | 暫時關掉 server 的 WiFi，或 `docker stop` | client 逾時（6 秒）、ZMQ 自動重連；恢復後不用重啟 bridge 就能繼續 |
+
+L4 實際觀察（從 bridge log 推斷當時做了這些測試，時間為 UTC）：
+
+| 時間 | client 看到的 | 對應情境 | 判讀 |
+|---|---|---|---|
+| 09:55:17 起 | `NO_QUERY`（v8） | 描述被清掉 | 符合預期 |
+| 09:57:40 | 1 次 `TIMEOUT`，之後 `NO_QUERY`（v0） | server 重啟 | 符合預期：重啟時在路上的請求遺失；重啟後描述消失 |
+| 09:59:01 起 | 4 次 `NOT_FOUND`（v1），之後轉為 `FOUND` | 重設描述為 `the paper water cup` | 前幾次沒找到，原因不確定（可能物件當時不在畫面） |
+
+尚未測到的情境：換描述（v+1）時 target 的替換、斷網後自動重連。
 
 ### L5：實測數據（給調參數用）
 
