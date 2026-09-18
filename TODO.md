@@ -1,7 +1,12 @@
 # TODO
 
 1. [Client 交接策略：現有作法 vs 預追蹤](#1-client-交接策略現有作法-vs-預追蹤)（現有作法已上線，B 待數據決定）
-2. [把 VLM 搬到雲端 AMD MI300X](#2-把-vlm-搬到雲端-amd-mi300x)（暫緩）
+2. [把 VLM 搬到雲端 AMD MI300X](#2-把-vlm-搬到雲端-amd-mi300x)（2026-09-19 重啟，和第 5 節並行）
+3. [嚴格匹配、不硬找](#3-嚴格匹配不硬找)（已調查，待實作）
+4. [現場評估集與評估腳本](#4-現場評估集與評估腳本)（待實作，第 3、5 節都靠它）
+5. [解析度掃描](#5-解析度掃描)（待實作）
+6. [V3 舊程式整理](#6-v3-舊程式整理)（暫緩）
+7. [其他注意事項](#7-其他注意事項)
 
 ## 1. Client 交接策略：現有作法 vs 預追蹤
 
@@ -34,8 +39,11 @@
 
 ## 2. 把 VLM 搬到雲端 AMD MI300X
 
-> 狀態：**暫緩**。2026-09-18 決定先專注本地路線（Hackathon-gpu，Radeon 860M）。
-> 這一節記錄已經查到的事實和要做的順序，之後要撿回來時不用重新調查。
+> 狀態：**2026-09-19 重啟，和第 5 節（解析度掃描）並行**。先做下方「執行順序」的步驟 1、2，需要雲端主機的 SSH 連線資訊。
+> （2026-09-18 曾暫緩。）這一節記錄已經查到的事實和要做的順序。
+>
+> 補充（2026-09-19）：推論時間主要花在視覺部分（見第 5 節），屬於運算密集。MI300X 的運算力遠高於 860M，
+> 前提仍是 backend 能在 MI300X 上跑（Vulkan 或 HIP，見下方「運算面」）。
 
 ### 為什麼考慮雲端
 
@@ -135,3 +143,116 @@ client 換 server 只是改 `vlm.endpoint`。
 - 有公開 IP 還是要走跳板 / VPN？
 - Pi 5 實際的上傳頻寬（會場 WiFi vs 有線）。
 - MI300X 的 ROCm 版本與是否有 Mesa/Vulkan。
+
+## 3. 嚴格匹配、不硬找
+
+> 狀態：**已調查，待實作**（2026-09-19）。
+
+### 問題
+
+畫面中沒有目標時，VLM 會抓「有點像」或只符合部分描述的物件。例如描述是 `plastic bottle` 卻抓到金屬瓶。
+希望只抓完全符合描述、而且可信度夠高的物件；找不到就回 `NOT_FOUND`，不要硬找。
+
+### 已確認的事實（讀 locate-anything.cpp v0.1.0 原始碼）
+
+模型本身有 system prompt 和信心值，但 C++ 版**都沒有暴露給呼叫端**：
+
+| 項目 | 模型本身 | locate-anything.cpp v0.1.0 |
+|---|---|---|
+| system prompt | 有（Qwen2.5 chat template：system → user → assistant） | `src/prompt.cpp` 寫死成 `"You are a helpful assistant."`；影像 token 放在 user turn、query 前面；呼叫端只能改 query |
+| 信心值 | 有（token 機率） | `src/mtp.cpp` 平行框解碼時會算每個 token 的 softmax，框要被接受需要 `BOX_START` 機率 ≥ **0.7**、結尾分數 ≥ 0.2；但這些機率**沒有存進偵測結果** |
+| 找不到就不回 | 有 | `src/lm.cpp` 遇到 `IM_END` 或 `NULL_TOK` 就結束，可以回空結果。AR 路徑是 greedy argmax，logits 可取得 |
+| C API | — | `la_capi.h` 只有 box 和 `la_capi_get_detection_label`，沒有 score |
+
+另外，我們現在用的 prompt（`app/models.py` `Locator.locate`，寫死）是「物件偵測」模板：
+`Locate all the instances that matches the following description: {q}.`
+model card 另有給指代表達式（帶屬性的描述）用的模板：
+
+| 名稱 | 模板 |
+|---|---|
+| `detect`（目前） | `Locate all the instances that matches the following description: {q}.` |
+| `ground_multi` | `Locate all the instances that match the following description: {q}.` |
+| `ground_single` | `Locate a single instance that matches the following description: {q}.` |
+| `region` | `Locate the region that matches the following description: {q}.` |
+
+### 做法
+
+1. **修改 locate-anything.cpp（用 patch 檔，不 fork）**：`deploy/patches/locate-anything-v0.1.0.patch`，Dockerfile 的 locate stage `git clone` 後 `git apply`，上游版本維持 v0.1.0。
+   動手前先讀 `src/boxes.cpp`、`src/engine.hpp`、`src/la_capi.cpp`，確認 `Box` 結構和偵測結果怎麼存。
+   - `LA_SYSTEM_PROMPT`：覆寫 system prompt；沒設時維持 `"You are a helpful assistant."`。
+   - 每個框的 score：MTP 路徑記錄 `BOX_START` 機率和座標 token 的 top-1 機率平均；AR 路徑記錄框開頭那一步的機率和座標 token 機率平均。
+     存進 `Box`，新增 `float la_capi_get_detection_score(la_ctx*, int i)`（拿不到回 -1），也寫進回傳的 JSON。採用哪個定義看評估結果。
+   - `LA_START_THRESH`：覆寫 0.7。
+   - Dockerfile 加 build 參數，可以切回沒有 patch 的版本對照。
+2. **server 端串接**（`app/models.py` `Locator`、`vlm_server/pipeline.py`）：
+   - `LA_PROMPT_TEMPLATE`：上表的名稱，或含 `{q}` 的自訂字串；預設 `detect`。
+   - 回應的 `score` 改填 VLM 信心值（ZMQ 協定欄位不變，只改 vlm_transport.md 的語意說明）。
+   - `VLM_MIN_SCORE`：所有框都低於門檻就回 `NOT_FOUND`；多個框時取 score 最高的（取代目前「取第一個」）。預設 0 = 不過濾。
+   - 所有新設定的預設值都維持現在的行為。
+3. 用第 4 節的評估集選出 `LA_SYSTEM_PROMPT`、`LA_PROMPT_TEMPLATE`、`VLM_MIN_SCORE`，寫進 `compose.vlm.yaml`。
+
+### 風險
+
+- 模型微調時用的是 `"You are a helpful assistant."`，換掉 system prompt 可能讓框的品質變差，**一定要用評估集驗證**。
+- score 可能分不開「正確物件」和「干擾物」（兩者都很像時，模型可能都很有信心）。
+
+### 暫緩
+
+- 負面描述：用 `</c>` 加對照類別（例如 `plastic bottle</c>metal bottle`），只接受 label 是目標的框。需要上級描述提供要排除的東西。
+- 裁切後再驗證一次（推論時間 ∝ 像素數，小的裁切圖推論很便宜）。
+
+### 驗證
+
+- 沒設任何新環境變數時，狗的圖和 `eval/images/lab-desk-cup-bottle.png` 的框要和 patch 前完全一樣，推論時間差在 2% 以內；score 落在 0～1。
+- 單元測試：模板格式化（預設名稱、自訂 `{q}`、未知名稱報錯）、`VLM_MIN_SCORE` 過濾、多個框時取最高分。
+
+## 4. 現場評估集與評估腳本
+
+> 狀態：**待實作**。第 3 節（選 prompt 與門檻）和第 5 節（選解析度）都需要它。
+
+- `tools/grab_frame.sh`：透過 `ssh Hackathon-pi` + `docker exec`，用 rclpy 單次訂閱 `/camera/camera/color/image_rect_raw`，存到 `eval/images/`。
+- 請現場擺出四種場景，每種 3～5 張：
+  1. 目標單獨出現（例如塑膠瓶）
+  2. 目標 + 干擾物（塑膠瓶 + 金屬瓶）
+  3. **只有干擾物**（只有金屬瓶，應回 `NOT_FOUND`）
+  4. 目標不在的一般桌面
+- `eval/cases.yaml`：每張圖的描述和預期結果（`none`，或預期框 `[x1, y1, x2, y2]`，從 overlay 目視標註）。
+  已有第一張：`eval/images/lab-desk-cup-bottle.png`（紙杯、水瓶，598×472）。
+- `scripts/eval_locate.py`（在容器內跑，模型只載入一次；system prompt、門檻用環境變數讀，每種設定分開跑一次程序）。
+  組合太多，分兩輪：
+  1. 固定 640 寬 + `fast`，掃 system prompt（預設 + 2～3 個嚴格版本）× 模板。
+  2. 用第 1 輪最好的設定，掃寬度（640／512／448／384）× `LA_MODE`（`fast`、`hybrid`）。
+- 指標：目標存在時的命中率（IoU ≥ 0.5）、目標不存在時的誤抓率、score 分布（存在 vs 不存在、正確物件 vs 干擾物，用來選 `VLM_MIN_SCORE`）、推論時間 p50；每個組合輸出 overlay 圖與 CSV。
+- 評估時 GPU 不能被搶：先停掉 Pi bridge 或暫停 server 容器，並確認第 7 節提到的其他容器的負載。
+
+## 5. 解析度掃描
+
+> 狀態：**待實作**，和第 2 節（雲端）並行。
+
+- 根據 locate-anything.cpp 的 README：量化只作用在語言模型，**視覺編碼器維持 f32**；MoonViT 是原生解析度輸入，影像 token 數和像素數成正比。
+- 這和實測吻合（`fast`，1～2 個目標）：
+
+  | 上傳尺寸 | 像素數 | 推論 |
+  |---|---:|---:|
+  | 640×362（Pi 相機） | 232k | 1.88 s |
+  | 598×472 | 282k | 2.35 s |
+  | 640×656 | 420k | 3.41 s |
+  | 640×669 | 428k | 3.51 s |
+
+- 所以**降解析度是最直接的加速方法**；換成 q4 量化（只縮語言模型）幫助不大。
+- 用第 4 節的評估腳本掃 640／512／448／384。照趨勢外插，512 寬可能約 1.2 秒，但**還沒驗證**，小物件的框也可能變差。
+- 有效的話請 client 調 `vlm.upload_max_width`（client 已有這個參數，server 不用改），並更新 server_progress.md 第 5 節。
+
+## 6. V3 舊程式整理
+
+> 狀態：**暫緩**，等使用者決定要移到 `legacy/` 還是刪除。
+
+- server 從 `~/Documents/vlm-server` 跑，V3 的容器沒有在跑。但 `vlm_server` 仍依賴幾個從 V3 繼承的檔案：
+  - `app/models.py`（`Locator`）
+  - `app/core.py`（`valid_box`）
+  - `app/gpu_check.py` + `scripts/gpu_probe.py`（只有 mask 模式用到）
+- 整理前先把這些搬進 `vlm_server/`，再處理其他檔案：NPU（`npu/`、`Dockerfile.npu*`、`compose.npu.yaml`）、Flask 網頁 demo（`app/server.py`、`app/static/`）、影片追蹤（`app/models.py` 的 `SegmentTracker`）、`Dockerfile.before-spirv-fix`、`Dockerfile.export`、`compose.attention.yaml`、`README_V3.md`、`VALIDATION.md`。
+
+## 7. 其他注意事項
+
+- **Hackathon-gpu 上有其他容器**：2026-09-19 看到 `mc-main-nav-engine`、`mc-main-nav-map`、`mc-main-nav-mocks` 在跑（不是這個專案的）。可能搶 CPU／GPU，量測延遲或跑評估前要先確認。

@@ -4,3 +4,5 @@ models/
 output/
 .env
 .venv/
+# Local test outputs from tools/test_client.py --out
+overlay*.jpg

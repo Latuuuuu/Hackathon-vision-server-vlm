@@ -31,28 +31,28 @@
 
 ## 2. 部署與更新流程（server 端）
 
-目前已經部署。之後改了程式要更新時：
+Hackathon-gpu 的 `~/Documents/vlm-server` 是這個 repo 的 git 工作目錄（從 GitHub clone），部署一律走 git，**不要再用 rsync 直接改那邊的檔案**
+（`deploy.sh` 發現有被追蹤的檔案被改過就會中止）。
 
 ```bash
-# 本機：同步程式碼（不含 models、output、.env）
-cd ~/DIT/Hackathon/Hackathon-vision-server-VLM
-rsync -a --exclude .git --exclude .venv --exclude '__pycache__/' \
-  --exclude models/ --exclude output/ --exclude .env \
-  ./ Hackathon-gpu:~/Documents/vlm-server/
+# 本機
+git push
 
-# Hackathon-gpu：重建並重啟
-ssh Hackathon-gpu
-cd ~/Documents/vlm-server
-export C="docker compose -f compose.yaml -f compose.rocm.yaml -f compose.vlm.yaml"
-$C build tracker
-$C run --rm --no-deps tracker python -m unittest tests.test_vlm_server   # 容器內測試
-$C up -d tracker
+# 部署 origin/main（build → 容器內單元測試 → 重啟 → 等 model_ready → 記錄到 output/DEPLOYED）
+ssh Hackathon-gpu '~/Documents/vlm-server/deploy/deploy.sh'
 
-# 等模型就緒（約 3～10 秒）
-until curl -sf localhost:8080/api/status | grep -q '"model_ready": *true'; do sleep 2; done; echo ready
+# 回滾到指定 commit
+ssh Hackathon-gpu '~/Documents/vlm-server/deploy/deploy.sh <commit>'
+
+# 目前部署的是哪個 commit
+ssh Hackathon-gpu 'cat ~/Documents/vlm-server/output/DEPLOYED'
 ```
 
-**重啟後描述會消失**，記得重設（或用 `VLM_INITIAL_QUERY`）。
+build 或測試失敗時 `deploy.sh` 會中止，**不會重啟**，server 繼續跑舊版本。
+
+- 模型放在 `~/models/vlm`（和 V3 資料夾的模型是 hardlink，不佔額外空間），由 `.env` 的 `LOCATE_MODELS_DIR` 指定。
+- `.env`、`output/` 被 gitignore，部署不會動到。可設定的項目見 `.env.example`。
+- **重啟後描述會消失**，記得重設（或在 `.env` 設 `VLM_INITIAL_QUERY`）。
 
 ## 3. 聯測步驟：由下往上，一層過了才往上
 
