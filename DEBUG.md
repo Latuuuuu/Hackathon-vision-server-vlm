@@ -66,6 +66,10 @@ ssh Hackathon-gpu 'curl -s localhost:8080/api/status'
 
 通過條件：`model_ready: true`、`model_error: null`、`model_info.la_mode` 是預期的模式。
 
+這一層**不看 `recent`**。`recent` 只保留最近 50 筆請求，這時候可能是空的，也可能是之前測試留下的舊資料
+（看 `client_stamp`，和 `date +%s` 相差很多就是舊的）。Pi 的請求要到 L3 換 endpoint 之後才會出現。
+`query.text` 也可能是之前測試留下的描述，L2 之前會重設。
+
 ### L1：Pi 到 server 的網路
 
 在 Pi 上用 client 容器裡的 pyzmq 量 ZMQ ping（Pi 主機本身沒裝 pyzmq）：
