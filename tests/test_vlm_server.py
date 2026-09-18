@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import threading
@@ -136,8 +137,11 @@ class EndToEnd(unittest.TestCase):
         self.stats.model_ready = True
         for text, status in (('cup', P.FOUND), ('nothing', P.NOT_FOUND), ('boom', P.ERROR)):
             self.queries.set(text)
-            self.detect(10)
-            reply, extra = self.recv()
+            # The worker logs the finder exception; capture it so the expected traceback stays out of test output.
+            logs = self.assertLogs('vlm_server.zmq_server', 'ERROR') if status == P.ERROR else contextlib.nullcontext()
+            with logs:
+                self.detect(10)
+                reply, extra = self.recv()
             self.assertEqual(reply['status'], status)
             if status == P.FOUND:
                 self.assertEqual((reply['bbox'], reply['num_candidates'], reply['has_mask']), ([1, 2, 11, 22], 3, True))

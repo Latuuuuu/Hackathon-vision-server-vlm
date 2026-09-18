@@ -8,7 +8,16 @@
 # A failed build or test leaves the running container untouched.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# Run from a temporary copy: 'git checkout' below rewrites (or, for older commits,
+# deletes) this file while bash is still reading it.
+if [[ -z "${DEPLOY_SH_COPY:-}" ]]; then
+  copy="$(mktemp --suffix=-deploy.sh)"
+  cp "$0" "$copy"
+  DEPLOY_SH_COPY="$copy" DEPLOY_REPO="$(cd "$(dirname "$0")/.." && pwd)" exec bash "$copy" "$@"
+fi
+trap 'rm -f "$DEPLOY_SH_COPY"' EXIT
+
+cd "$DEPLOY_REPO"
 REF="${1:-origin/main}"
 PORT="${VLM_HTTP_PORT:-8080}"
 READY_TIMEOUT_S="${READY_TIMEOUT_S:-120}"
