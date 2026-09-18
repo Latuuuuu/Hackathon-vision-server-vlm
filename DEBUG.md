@@ -72,7 +72,11 @@ ssh Hackathon-gpu 'curl -s localhost:8080/api/status'
 
 ### L1：Pi 到 server 的網路
 
-在 Pi 上用 client 容器裡的 pyzmq 量 ZMQ ping（Pi 主機本身沒裝 pyzmq）：
+在 Pi 上用 client 容器裡的 pyzmq 量 ZMQ ping（Pi 主機本身沒裝 pyzmq）。
+
+**整段指令貼到筆電或 Pi 的 shell 執行，不要貼進 Python 互動模式（`>>>`）。**
+互動模式裡 `for` 迴圈後面要多按一次空白行的 Enter 才會結束，直接貼上會變成 `SyntaxError`，
+迴圈一次都沒跑，最後出現 `no median for empty data`。這不是網路問題。
 
 ```bash
 ssh Hackathon-pi 'docker exec -i hackathon-vision-client-ws python3 -' <<'EOF'
@@ -92,7 +96,15 @@ EOF
 ```
 
 通過條件：`n=30`（沒有掉包）、p50 在 20 ms 以內、`status=PONG`。
-參考值：2026-09-19 在實驗室量到 p50 9.0 ms、max 111.7 ms。
+參考值（2026-09-19，實驗室）：
+
+| 次數 | p50 | p90 | p99 | max | 超過 100 ms |
+|---:|---:|---:|---:|---:|---:|
+| 30 | 9.0 ms | 12.6 ms | — | 111.7 ms | — |
+| 30 | 9.5 ms | — | — | 641.9 ms | 單次尖峰 |
+| 100 | 10.8 ms | 23.0 ms | 69.4 ms | 93.8 ms | 0 次 |
+
+偶爾會有單次數百 ms 的尖峰，但遠低於 `timeout_s = 6.0`，不影響。
 
 > 用 `ping`（ICMP）量會高很多：同一時間 ICMP 平均 97 ms、最高 142 ms，但 ZMQ ping 的 p50 只有 9 ms。
 > 推測是 Pi 的 WiFi（brcmfmac）省電模式：ICMP 每秒一包，網卡有空檔進入睡眠；上面的腳本每 0.2 秒一包，網卡保持醒著。
