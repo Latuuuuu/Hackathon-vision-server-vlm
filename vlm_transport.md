@@ -1,6 +1,7 @@
 # VLM Target 傳輸介面
 
-> 狀態：**server 已實作（`vlm_server/`），client 還沒實作**。server 已通過本機單元測試與 mock 測試，尚未在 GPU 主機上實測延遲。下面的預設值（port、逾時、縮圖寬度等）是暫定值，要等實測來回延遲後再調整。
+> 狀態：**server 與 client 都已實作，2026-09-19 在 Pi 5 ↔ Hackathon-gpu 聯測通過**（約 40 分鐘，296 筆 detect，290 筆 `FOUND`）。
+> 第 7 節的參數已依實測更新。進度細節：[server_progress.md](server_progress.md)、[client_progress.md](client_progress.md)；聯測與除錯：[DEBUG.md](DEBUG.md)。
 
 ## 1. 流程總覽
 
@@ -83,8 +84,8 @@ DEALER 送出時**不加**空的分隔 frame（這點和 REQ 不同）。
 |---|---|---|
 | Port | `5555/tcp` | client 參數 `vlm.endpoint` 可以改；server 端 `VLM_ZMQ_BIND` |
 | 描述 API port | `8080/tcp` | HTTP，見 4.5；server 端 `VLM_HTTP_PORT` |
-| Server IP | 暫定 Hackathon-gpu `192.168.50.125` | 建議在 WiFi AP 上固定 IP，或在 router 設 DHCP 保留 |
-| 防火牆 | server 要開放 `5555/tcp`、`8080/tcp` 入站 | 例如 `sudo ufw allow 5555/tcp` |
+| Server IP | Hackathon-gpu `192.168.50.125` | **目前是 DHCP 拿的**（WiFi `DIT_ROBOTICS_5G`），可能會變。上機器人前要在 router（`192.168.50.1`）設 DHCP 保留 |
+| 防火牆 | server 要開放 `5555/tcp`、`8080/tcp` 入站 | Hackathon-gpu 目前不需要另外設定，Pi 已可連線 |
 | Docker | client container 已經是 `network_mode: host`，不需要另外映射 port | server 若跑在 container 裡要映射或用 host 網路 |
 | ROS_DOMAIN_ID | 不受影響 | 這條連線不走 DDS |
 
@@ -211,7 +212,12 @@ curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/
 
 ### server 端的注意事項
 
-client 逾時後可能會送出新的 request，server 這時可能還在處理舊的那筆。server 處理完一筆後，應該先把 socket 裡排隊的 request 全部讀出來，**只處理最新的一筆**，其餘直接丟掉，不需要回覆。
+client 逾時後可能會送出新的 request，server 這時可能還在處理舊的那筆。server 的實作（`vlm_server/zmq_server.py`）：
+
+- 每個 client（ZMQ identity）只保留**最新的一筆**等待中的 detect，推論中收到新的就覆蓋舊的，被覆蓋的不回覆（`/api/status` 的 `dropped_requests` 會 +1）。
+- **正在跑的推論不會被中斷**。所以 `timeout_s` 太短時，重送的請求會排在還沒跑完的那筆後面。
+- 同時只跑一筆推論。多個 client 同時送圖時輪流處理，`server_ms` 會包含排隊時間。
+- `ping`、`NO_QUERY`、模型載入中的 `ERROR` 不經過推論，立刻回覆。
 
 ## 6. 送圖時機（client 端）
 
@@ -223,20 +229,29 @@ client 逾時後可能會送出新的 request，server 這時可能還在處理�
 4. 上一筆逾時。
 5. `query_version` 改變。
 
+client 的實作（`vlm_bridge_node`）：同時只有一筆在路上；第 3 點的間隔從**上一次送出**開始算。
+所以 `refresh_period_s` 小於 rtt（包括 `0.0`）就等於「回來一筆、馬上送最新一幀」，GPU 一直在跑，target 約每 2 秒更新一次。
+這樣的新鮮度和每幀都送一樣（結果回來時畫面約 2 秒前），但上傳量只有約 1/60，不需要改成每幀都送。
+
 之後可以再加的優化：在最近幾幀中挑最清楚的一幀送（例如 Laplacian variance 最高的，或相機靜止時的那一幀）。
 
-## 7. Client 參數（暫定）
+## 7. Client 參數
 
-| 參數 | 預設 | 說明 |
+依 2026-09-19 聯測數據（第 8.1 節）更新。`LA_MODE=fast`、Pi 相機 848×480 縮成 640×362。
+
+| 參數 | 建議值 | 說明 |
 |---|---|---|
-| `vlm.enable` | `false` | 關閉時沿用 `target_image_path` 的靜態 target |
-| `vlm.endpoint` | `tcp://192.168.50.125:5555` | server 位址（Hackathon-gpu） |
-| `vlm.timeout_s` | `6.0` | 等待回應的上限。`LA_MODE=fast` 實測 rtt p50 3.44 s、max 3.71 s，留約 2.3 s 餘裕；`slow`／`hybrid` 要改成 `12.0` |
-| `vlm.refresh_period_s` | `8.0` | 追蹤中定期送圖的間隔。必須明顯大於推論時間，否則上一筆剛回來就送下一筆，GPU 全程忙碌 |
-| `vlm.lost_frames_trigger` | `10` | 連續追丟幾幀就送圖 |
-| `vlm.upload_max_width` | `640` | 上傳前縮圖的最大寬度，應配合 VLM 的輸入尺寸 |
-| `vlm.jpeg_quality` | `80` | JPEG 壓縮品質 |
-| `vlm.cache_size` | `4` | 本地快取的幀數 |
+| `vlm.enable` | `true` | 關閉時沿用 `target_image_path` 的靜態 target |
+| `vlm.endpoint` | `tcp://192.168.50.125:5555` | Hackathon-gpu。IP 目前是 DHCP，見第 3 節 |
+| `vlm.timeout_s` | `5.0` | 實測 rtt 最大 2.83 s。原則是**大於「最慢推論 + 最慢網路」**，否則逾時重送會排在 server 還沒跑完的那筆後面，接著連續逾時。`slow`／`hybrid` 要改成 `12.0` |
+| `vlm.refresh_period_s` | `0.0` | 回來一筆馬上送下一筆（第 6 節）。要省 GPU 時才調大 |
+| `vlm.upload_max_width` | `640` | 推論時間大致和像素數成正比（第 8.2 節），改了之後要重新量 |
+| `vlm.jpeg_quality` | `80` | 640×362 約 27 KB，網路只佔總延遲約 5% |
+| `vlm.ping_period_s` | `2.0` | 只在沒有請求在路上時送；連續送圖時主要在 backoff 期間有用 |
+| `vlm.no_query_backoff_s` | `1.0` | `NO_QUERY` 立刻回、不跑推論，重試便宜。client 的 backoff 會擋住 ping 發現的描述變更，太長會讓新描述晚生效 |
+| `vlm.error_backoff_s` | `2.0` | 主要是 server 重啟後的 `model loading`（約 3～10 秒） |
+| `vlm.lost_frames_trigger` | `10` | 連續追丟幾幀就送圖（client 尚未實作；連續送圖時影響不大） |
+| `init.cache_s` | `7.0` | client 以時間快取送出的幀，要大於 `timeout_s`（取代原本的 `vlm.cache_size`） |
 
 ## 8. 延遲量測
 
@@ -250,11 +265,43 @@ network_ms  = rtt_ms − server_ms
 handoff_ms  = 建 target + 在目前這一幀驗證的時間
 ```
 
-目前還沒有 WiFi 上的 `rtt_ms` 實測。`vlm.timeout_s` 和 `vlm.refresh_period_s` 要等量到 `rtt_ms` 的分布後再決定。
+### server 環境
 
-**server 端推論時間初測**（2026-09-18，Hackathon-gpu Radeon 860M，`LA_MODE=slow`，`scripts/smoke_pipeline.py`，不含網路，每組 3 次、排除第 1 次暖機）：
+Hackathon-gpu：AMD Ryzen AI 7 350，內顯 **AMD Radeon 860M**（RDNA 3.5，`gfx1152`，與 CPU 共用 30 GiB 記憶體）。
+VLM 是 LocateAnything-3B（gguf `q8_0`），locate-anything.cpp 走 **Vulkan**。預設 `LA_MODE=fast`、只回 bbox（不跑 SAM2）。
 
-`LA_MODE` × 畫面目標數，每組 4 次取後 3 次的中位數（括號是最小～最大），描述都是 `the dog`：
+### 8.1 Pi 5 ↔ server 聯測（2026-09-19，主要依據）
+
+Pi 5 走 WiFi，相機 848×480 縮成 640×362（約 27 KB），`fast`，約 40 分鐘，數字來自 client 的 bridge log：
+
+| 指標 | 樣本 | p50 | p95 | p99 | 最大 |
+|---|---:|---:|---:|---:|---:|
+| `rtt_ms` | 296 | 1988 | 2054 | 2101 | 2826 |
+| `server_ms` | 296 | 1883 | 1891 | 1894 | 1914 |
+| `network_ms` | 296 | 103 | 170 | 218 | 944 |
+
+ZMQ `ping`（Pi 容器內，100 次，0.2 秒一次）：p50 10.8 ms、p99 69.4 ms、最大 93.8 ms。
+
+- **推論 1.9 秒是穩定值**：server 端 `locate_ms` 50 筆介於 1879～1888 ms。前提是解析度、場景、單一 client 都不變。
+- `network_ms`（p50 103 ms）比 ping（約 10 ms）高很多。推測是 detect 間隔長時 WiFi 省電讓網卡睡著，**還沒驗證**。只佔總延遲約 5%。
+- 會讓推論時間改變的情況：上傳像素數（8.2）、大量同類物件（8.3）、多個 client 同時送（排隊，`server_ms` 約變兩倍，`locate_ms` 不變）、server 重啟後第一筆（多約 0.6 秒暖機）。
+
+### 8.2 推論時間與上傳像素數
+
+`fast`、1～2 個目標、單一 client，推論時間大致和像素數成正比：
+
+| 上傳尺寸 | 像素數 | 推論 |
+|---|---:|---:|
+| 640×362（Pi 相機） | 232k | 1.88 s |
+| 598×472（實驗室照片） | 282k | 2.35 s |
+| 640×656（1 隻狗） | 420k | 3.41 s |
+| 640×669（2 隻狗） | 428k | 3.51 s |
+
+照這個趨勢，512 寬（148k 像素）**可能**降到約 1.2 秒。這是外插，**還沒驗證**，小物件的框也可能變差。
+
+### 8.3 `LA_MODE` 比較（2026-09-18，狗的測試圖）
+
+`scripts/smoke_pipeline.py`，不含網路。每組 4 次，取後 3 次的中位數（括號是最小～最大），描述都是 `the dog`：
 
 | 圖片（640 寬） | 目標數 | `slow` | `hybrid` | `fast` |
 |---|---:|---:|---:|---:|
@@ -262,45 +309,35 @@ handoff_ms  = 建 target + 在目前這一幀驗證的時間
 | two-dogs | 2 | 7.30 s（4.97–7.79） | 7.39 s（7.01–7.41） | **3.51 s**（3.50–3.51） |
 | many-dogs | 15 | 9.98 s（8.25–10.93） | 4.25 s（4.25–4.25） | **3.30 s**（3.30–3.30） |
 
-品質（同一張圖、不同模式的 bbox）：
+品質：
 
-- 1～2 個目標時，三種模式框出來的位置幾乎一樣（差幾個 px），`fast` 可用。
-- 15 個目標時 `fast` 壞掉：回傳 `[0, 234, 640, 355]`，一條橫跨整張圖的框，不是單一隻狗；`slow` 和 `hybrid` 都正確框住其中一隻。
-- `hybrid` 在 15 個目標時反而比 1 個目標快（4.25 s vs 6.90 s），這點還沒有解釋，樣本只有 3 張圖。
+- 1～2 個目標時，三種模式的框幾乎一樣（差幾個 px），`fast` 可用。
+- 15 個目標時 `fast` 壞掉：回傳 `[0, 234, 640, 355]`，橫跨整張圖；`slow` 和 `hybrid` 都正確框住其中一隻。
+- `hybrid` 在 15 個目標時反而比 1 個目標快，原因還不清楚，樣本只有 3 張圖。
+- 實驗室照片（598×472）用 `fast` 測紙杯、水瓶，框都緊貼物件，同一張圖三次輸出完全一樣。
 
-### WiFi 端到端實測（2026-09-18，`LA_MODE=fast`，one-dog 640×656 JPEG q80 44 KB，8 次）
+結論：**預設 `fast`**；場上可能出現大量同類物件時改 `hybrid`，`timeout_s` 同時改成 `12.0`。
 
-| 指標 | p50 | min | max |
-|---|---:|---:|---:|
-| `rtt_ms`（client 送出到收到） | 3444 | 3438 | 3714 |
-| `server_ms` | 3408 | 3404 | 3411 |
-| `network_ms`（= rtt − server） | **36** | 27 | 307 |
+### 8.4 其他
 
-`ping` 型別的來回延遲（不含推論，20 次）：p50 **4.4 ms**、max 16.4 ms。
-
-- 網路只佔總延遲約 1%，**瓶頸完全在 VLM 推論**。
-- `network_ms` 偶發衝到 307 ms，應是 WiFi 抖動；逾時要照 max 而不是 p50 設。
-- 兩台機器在同一個 WiFi AP 下。上機器人實測前這組數字只能當下界。
-
-SAM2 mask 的額外成本（另一組測試，`--mask`，SAM 輸入 1024）：暖機後約 0.60–0.63 秒，第一次呼叫約 2.3 秒。
-
-初步結論：
-
-- **1～2 個目標的情境建議 `LA_MODE=fast`**：約 3.4 秒、抖動極小、框的品質和 `slow` 幾乎一樣。畫面可能出現一堆同類物件時要改回 `hybrid`。
-- `slow` 和 `hybrid` 在少目標時抖動大（5～7.8 秒），逾時要抓上界不能抓中位數。
-- 即使用 `fast`，`vlm.timeout_s = 5.0` 只剩約 1.5 秒的網路餘裕。建議設 `6.0`（fast）或 `12.0`（slow/hybrid），`vlm.refresh_period_s` 也要大於實際推論時間，否則每次都在重送。
-- server 會拒絕長邊超過 `VLM_MAX_INPUT_SIDE`（預設 1280）的圖並回 `ERROR`：實測 4000×2700 的圖會讓 Locate 嘗試配置 41 GB 記憶體後 segfault。
+- SAM2 mask（`VLM_RETURN_MASK=1`，SAM 輸入 1024）：每次多約 0.60–0.63 秒，第一次約 2.3 秒。
+- server 會拒絕長邊超過 `VLM_MAX_INPUT_SIDE`（預設 1280）的圖並回 `ERROR`：4000×2700 的圖會讓 Locate 嘗試配置 41 GB 記憶體後 segfault。
+- 較早的筆電 ↔ server WiFi 測試（2026-09-18，640×656 圖）：rtt p50 3444 ms，`network_ms` p50 36 ms，最大 307 ms。
 
 ## 9. 開發順序建議
 
 1. **mock server**（已完成）：`python -m tools.mock_server --query "cup" --delay 0.8 --drop-rate 0.1 [--mask]`，回傳置中或 `--bbox` 指定的框，可加人工延遲和隨機不回應，模擬 WiFi。`python -m tools.test_client` 可以拿來對照 client 行為。
-2. **client 網路 thread + 快取 + 逾時**，先用 `ping` 驗證連線。
-3. **handoff**：用 mask 建 target，驗證後替換。
-4. 接上真的 server，實測延遲後調整參數。
+2. **client 網路 thread + 快取 + 逾時**（已完成），先用 `ping` 驗證連線。
+3. **handoff**：用 bbox（＋深度）建 target，驗證後替換（已完成，真 server 上的 handoff 成功率待確認）。
+4. 接上真的 server，實測延遲後調整參數（已完成聯測，參數見第 7 節）。
 
 ## 10. 相依套件與待確認事項
 
-- client 的 Dockerfile 要加 `libzmq3-dev`。C++ header 版的 cppzmq 在 Ubuntu 22.04 的 apt 套件名稱還沒查證，找不到的話直接用 libzmq 的 C API。
+- client 的 Dockerfile 要加 `libzmq3-dev`。
 - server 是 Python，用 `pyzmq`（已加進 requirements.txt）。
-- 已約定：port 5555（ZMQ）/ 8080（HTTP 描述）、`query_version` 由 server 在描述改變時遞增、bbox 用 `[x1, y1, x2, y2]`。
-- 待確認：server 正式 IP、VLM 實際推論時間（決定 `vlm.timeout_s`）、上級描述最終走 HTTP 還是 ROS 2。
+- 已約定：port 5555（ZMQ）/ 8080（HTTP 描述）、`query_version` 由 server 在描述改變時遞增、bbox 用 `[x1, y1, x2, y2]`、`LA_MODE=fast`。
+- 待處理：
+  - server IP 在 router 設 DHCP 保留。
+  - server 重啟後 `query_version` 從 0 重算，可能和重啟前撞號（server_progress.md 第 7 節）。
+  - 上級描述最終走 HTTP 還是 ROS 2。
+  - 縮小 `upload_max_width` 的速度與品質驗證。

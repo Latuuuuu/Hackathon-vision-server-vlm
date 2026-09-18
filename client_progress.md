@@ -5,9 +5,9 @@
 ## 摘要
 
 - **client 端已照 `vlm_transport.md` 實作完成**：送圖、收 bbox、用深度切出物件、交給 tracker 追蹤。
-- **目前只和 client 自己的 mock server 端到端測過**，還沒接真的 server（Hackathon-gpu）。
+- **已經和真的 server 接通**：client 跑在 Pi 5 上，server 跑在本地 GPU 主機。rtt 約 1.9 秒，其中網路約 35～68 ms（第 4 節）。
 - **tracker 已經在 Pi 5 上編譯、執行**，`/tracked_object/point` 約 26 Hz。
-- 下一步是接真的 server，量機器人上的 WiFi 延遲。
+- 下一步是確認 tracker 用 server 的 bbox 建 target 成功，並依實測延遲調整送圖間隔。
 
 ## 1. 已完成
 
@@ -67,9 +67,24 @@ server 預設只回 bbox，client 在 tracker 端用深度把物件切出來：
 |---|---|---|
 | bridge + mock server 端到端 | x86 docker，同一台機器 | 通過：送圖 → `FOUND` → tracker 建 target 成功 |
 | 失敗情境 | 同上 | 通過：server 沒開、中途重啟、掉包、`NOT_FOUND`、`NO_QUERY`、`model loading`、`query_version` 改變 |
-| 接真的 server（Hackathon-gpu） | — | **還沒測** |
-| 機器人上的 WiFi 延遲 | — | **還沒測**；文件第 8 節的數字是兩台機器在同一個 AP 下量的 |
+| 接真的 server | client：Pi 5；server：本地 GPU 主機 | 通過：連續 4 筆都是 `FOUND`，mask 已發布（見下）。tracker 端有沒有 handoff 成功**還沒確認** |
+| 機器人上的 WiFi 延遲 | — | **還沒確認**：上面那次的網路路徑沒有記錄 |
 | tracker 在 Pi 5 上執行 | Pi 5 8GB，D405 | 見下 |
+
+**Pi 5 → 真 server 的延遲**（2026-09-18，4 筆 `detect`）：
+
+| 指標 | 範圍 |
+|---|---:|
+| `rtt_ms` | 1915～1952 |
+| `server_ms` | 1880～1884 |
+| `network_ms`（= rtt − server） | 35～68 |
+| `encode_ms`（Pi 5 上 JPEG 壓縮） | 5～10 |
+| 上傳 JPEG | 640×362，27 KB |
+
+- rtt 比第 8 節的 3.4 秒短。這次 server 的 `LA_MODE` 和 GPU 型號**沒有記錄**，所以不能直接和第 8 節比較。
+- 4 筆的 bbox 都是 `[235, 323, 326, 432]`（換算回原始 848×480 的座標）。量測時畫面應該是靜止的，這一點待確認。
+- 網路路徑（WiFi 或有線、是否在機器人上）**沒有記錄**。
+- 送圖間隔約 8 秒（`refresh_period_s`），推論約 1.9 秒，所以 GPU 大約 3/4 的時間是閒置的。
 
 **Pi 5 上 `/tracked_object/point` 的輸出頻率**（`ros2 topic hz`，約 190 個樣本）：
 
@@ -87,12 +102,13 @@ server 預設只回 bbox，client 在 tracker 端用深度把物件切出來：
 1. **正式 IP**：目前寫死 `192.168.50.125`。上機器人之前請確認會不會變（建議在 router 設 DHCP 保留）。
 2. **`LA_MODE`**：client 的 `timeout_s = 6.0` 是照 `fast` 設的。如果場上會用 `slow` 或 `hybrid`，請告訴我們，要改成 `12.0`。
 3. **bbox 的鬆緊**：client 用深度在 bbox 內切物件，bbox 越貼近物件越準。如果 VLM 的框習慣偏大，請告訴我們，可能要評估開 mask。
-4. **聯測時間**：希望安排一次接真 server 的測試，同時量機器人上的 WiFi rtt。
+4. **這次聯測的 server 設定**：請補上 `LA_MODE`、GPU 型號，以及推論 1.9 秒是不是穩定值。client 的 `timeout_s`、`refresh_period_s` 要依這個調整。
 5. **上級描述走 HTTP 還是 ROS 2**：client 不受影響，但聯測時需要知道怎麼設定描述。
 
 ## 6. 接下來（client 端）
 
-- 接真的 server 聯測，依實測 rtt 調整 `timeout_s`、`refresh_period_s`。
+- 確認 tracker 用真 server 的 bbox 建 target 成功（看 tracker 的 `Mask cleaned`、handoff log）。
+- 依實測 rtt 調整 `refresh_period_s`（例如 8 → 3～4 秒，讓 target 更新得更頻繁）；`timeout_s` 等確認 `LA_MODE` 之後再調。
 - 在機器人上量 WiFi 延遲，以及 Pi 5 上的 CPU 使用率。
 - 讓 bridge 知道 tracker 狀態，補上「連續追丟就送圖」和「`query_version` 改變時丟掉舊 target」。
 - 改善 bbox 內的深度切割（例如取最近的主要深度群，不用中位數）。

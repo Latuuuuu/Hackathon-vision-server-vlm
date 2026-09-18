@@ -1,87 +1,35 @@
 # TODO
 
-1. [Client 交接策略：現有作法 vs 預追蹤](#1-client-交接策略現有作法-vs-預追蹤)（進行中，client 還沒實作）
+1. [Client 交接策略：現有作法 vs 預追蹤](#1-client-交接策略現有作法-vs-預追蹤)（現有作法已上線，B 待數據決定）
 2. [把 VLM 搬到雲端 AMD MI300X](#2-把-vlm-搬到雲端-amd-mi300x)（暫緩）
 
 ## 1. Client 交接策略：現有作法 vs 預追蹤
 
-> 狀態：**待決定**。protocol 不受影響，兩種作法 server 都只回 bbox（mask 選配）。
+> 狀態：**現有作法已由 client 實作，並和真 server 聯測通過（2026-09-19）**。方案 B 待數據決定。
+> 完整分析（含已丟棄的方案 A、比較表、判斷規則）已整理到 [server_progress.md](server_progress.md) 第 6 節，這裡只追蹤進度。
 
-### 要解決的問題
+### 摘要
 
-server 回傳時，bbox 描述的是 **約 3.4 秒前**送出的那一幀
-（`LA_MODE=fast` WiFi 實測 rtt p50 3.44 s、max 3.71 s，以 30 fps 計約 100 幀前）。
-這段時間機器人和物體都可能在動，client 必須把「舊畫面上的 bbox」轉成「現在畫面上的 target」。
+- 問題：bbox 回來時描述的是約 2 秒前（約 60 幀前）的畫面（聯測 rtt p50 1988 ms）。
+- **現有作法**：client 快取送出的幀，bbox 回來後用同一幀建 target，在現在這一幀驗證後替換。
+- **方案 B（預追蹤）**：送圖時撒 KLT 點、等待期間逐幀追，bbox 回來時直接取已在現在這一幀的點。
+  最能應付位移，但等待期間每幀都要跑 KLT；client 改成連續送圖（`refresh_period_s = 0`）後等於一直在跑。
+- **方案 A（server 抽特徵往下傳）**：已丟棄。
+- **決策**：先用現有作法量三項數據（交接驗證失敗率、延遲期間位移、Pi 5 CPU 餘裕），依 server_progress.md 第 6 節的規則決定要不要加 B。
 
-### 已排除：server 端抽特徵往下傳（方案 A）
+### 目前線索
 
-曾考慮 server 在 bbox/mask 內抽特徵傳給下游，讓下游直接做 KLT、不存舊圖。**已丟棄**，理由：
-
-- KLT 是逐幀追蹤，需要前一幀的影像 patch，而且只能處理數十 px 的位移。
-  座標屬於約 100 幀前的畫面，直接跳到現在會追丟；逐幀推又得存 100 幀，比現在更多。
-- 改傳 ORB 描述子雖然可行，但特徵是從 q80 縮圖 JPEG 抽的，比對率會比 client 原始畫面差；
-  server 還得跟 tracker 的 ORB 參數與 OpenCV 版本綁死。換來的只是省下約 1.2 MB 灰階快取。
-
-### 兩種候選作法
-
-**現有作法：client 快取 + 當前幀驗證**（[vlm_transport.md](vlm_transport.md) §5）
-
-1. 送圖時把該幀的灰階、深度、camera→map TF 存進快取（`vlm.cache_size = 4`）。
-2. bbox 回來：從快取取出同一幀，在 bbox 內用深度切出物件、抽 ORB 建新 target。
-3. 在「現在這一幀」偵測新 target，成功才替換舊 target；失敗就保留舊的，再試 N 幀。
-4. 可選強化：用 t0 的深度 + TF 把目標投影到現在的畫面，當作搜尋起點（只對靜態物件有效）。
-
-**方案 B：client 預追蹤**
-
-1. 送圖的同時，在 t0 整張畫面撒一批 KLT 點（例如 `goodFeaturesToTrack` 或規則網格）。
-2. 等待期間逐幀用 `calcOpticalFlowPyrLK` 追這些點，建議加 forward-backward 檢查剔除壞點。
-3. bbox 回來：挑出「起點落在 bbox 內、而且還活著」的點。這些點**已經在現在這一幀的位置上**。
-4. 用這批點在 t0 與現在之間的位移估出變換（similarity / homography），把 bbox 搬到現在的畫面，
-   再用**現在這一幀的深度**切出物件，直接開始追蹤。
-
-> 更正先前的分析：B 不需要保留 t0 的深度和 TF。點已經在當前幀，深度切割和 3D 發布都用當前幀的資料即可。
-
-### 比較
-
-| 面向 | 現有作法 | 方案 B：預追蹤 |
-|---|---|---|
-| 快取 | 4 幀灰階 + 深度 + TF，約 3.7 MB | 不需要影像快取，只存點軌跡 |
-| 應付 3.4 秒位移 | 靠外觀在當前幀重新偵測；視角、尺度變化大時可能失敗 | **最好**：點是一路追過來的，不怕大位移 |
-| 移動中的物體 | 外觀比對可處理；TF 投影強化只對靜態物件有效 | 可處理 |
-| Pi 5 運算 | 只在交接時抽一次 ORB、比對一次 | **等待期間每幀都要跑 KLT**（約 3.4 秒 × 30 fps），負擔最重，**未實測** |
-| 失敗模式 | 驗證失敗 → 保留舊 target，再試 | 目標上的點全數追丟（遮擋、快速轉動、模糊）→ 這筆請求作廢，只能重送，再等約 3.4 秒 |
-| 實作複雜度 | 較低，流程直觀 | 較高：要管理點的生命週期、去除壞點、估計變換 |
-| server 端 | 不用改 | 不用改 |
-
-### 怎麼選：先做現有作法，用數據決定要不要加 B
-
-**建議順序：先實作現有作法，量數據，再決定。** 理由：
-
-- 現有作法比較簡單，也是驗證整條 pipeline 的最短路徑。
-- B 追丟時沒有後備，實務上很可能還是需要現有作法當 fallback。先做現有作法不會白做。
-- protocol 不用改，之後再加 B 只動 client。
-
-實作現有作法時，順手記錄這三個數據：
-
-| 要量的 | 怎麼量 | 看到什麼就該考慮 B |
-|---|---|---|
-| **交接驗證失敗率** | 統計第 3 步「在現在這一幀偵測新 target」的成功與失敗次數 | 失敗率明顯偏高，而且失敗多發生在機器人或物體移動時 |
-| **延遲期間的位移** | 用 TF 算送圖到收到回應之間相機平移與旋轉量；或用 bbox 中心在影像上的位移 | 常常超過 bbox 寬度的一半，或相機轉角大到物體快出畫面 |
-| **Pi 5 CPU 餘裕** | 在 Pi 5 上用實際解析度量 `calcOpticalFlowPyrLK`（例如 200 / 500 點）每幀耗時，加上現有 tracker 的負載 | 這是 B 的前提：每幀 KLT 加上 tracker 要能在 33 ms 內跑完（30 fps），否則 B 不可行或要降點數、降幀率 |
-
-判斷規則：
-
-- **失敗率可接受** → 維持現有作法，B 不做。
-- **失敗率高、主因是位移，而且 Pi 5 有 CPU 餘裕** → 加 B，現有作法保留當 fallback。
-- **失敗率高、但 Pi 5 沒有餘裕** → 先試「用 t0 深度 + TF 投影當搜尋起點」（成本低，限靜態物件），
-  或降低機器人在等待期間的移動（例如送圖時先減速）。
-- **失敗主因是外觀**（光線、角度、遮擋），不是位移 → B 也救不了，改善 tracker 的特徵或驗證條件。
+- tracker debug 畫面：`TRACKING OK KLT`，每幀 6.8 ms、追 134 點，離 33 ms（30 fps）的預算還有空間。
+  但 B 要在整張畫面追更多點，bridge 和相機驅動也在用 CPU，**還不能推論 B 可行**。
 
 ### 待辦
 
-- [ ] 實作現有作法（client：網路 thread + 快取 + 逾時 + 交接驗證）
-- [ ] 加上三項量測的 log
-- [ ] 在 Pi 5 上量 `calcOpticalFlowPyrLK` 的每幀耗時
+- [x] 實作現有作法（client：網路 thread + 快取 + 逾時 + 交接驗證）
+- [x] 和真 server 聯測（DEBUG.md L0～L3 通過）
+- [ ] client 參數改成 server_progress.md 第 5 節的建議（`refresh_period_s = 0.0` 等）
+- [ ] 確認 tracker 用真 server 的 bbox 建 target 成功（handoff log）
+- [ ] client 加上三項量測的 log
+- [ ] 在 Pi 5 上量 `calcOpticalFlowPyrLK`（200／500 點）的每幀耗時
 - [ ] 依數據決定是否加 B
 
 ## 2. 把 VLM 搬到雲端 AMD MI300X
@@ -91,8 +39,9 @@ server 回傳時，bbox 描述的是 **約 3.4 秒前**送出的那一幀
 
 ### 為什麼考慮雲端
 
-本地 server 在 Radeon 860M 上，單/雙目標、`LA_MODE=fast` 的推論時間約 **3.4 秒**（實測，見 [vlm_transport.md](vlm_transport.md) §8）。
-對追蹤來說偏慢，client 的 `vlm.refresh_period_s` 只能設得比這個更長。
+本地 server 在 Radeon 860M 上，`LA_MODE=fast`、Pi 相機畫面（640×362）的推論時間約 **1.9 秒**，
+端到端 rtt 約 2.0 秒（2026-09-19 聯測，見 [vlm_transport.md](vlm_transport.md) §8）。
+client 連續送圖時，target 約每 2 秒更新一次；推論時間大致和上傳像素數成正比。
 
 MI300X 有加速的物理基礎：LocateAnything-3B 的解碼階段是**記憶體頻寬受限**，
 860M 共用 LPDDR5X 約 120 GB/s，MI300X 是 HBM3 5.3 TB/s，理論差約 40 倍。
@@ -111,13 +60,15 @@ MI300X 有加速的物理基礎：LocateAnything-3B 的解碼階段是**記憶�
 
 | 項目 | 數值 |
 |---|---|
-| 上傳 JPEG | 44 KB（單目標）～ 87 KB（15 隻狗的複雜畫面），實測 |
+| 上傳 JPEG | Pi 相機 640×362 約 27 KB；測試圖 44 KB（單目標）～ 87 KB（15 隻狗的複雜畫面），實測 |
 | 回傳 | bbox JSON 約 200 bytes，可忽略 |
 | Pi 上傳 87 KB | uplink 5 Mbps ≈ 140 ms；20 Mbps ≈ 35 ms |
 | 到區域機房 RTT | 10～40 ms（跨區 150～250 ms） |
 | **網路總成本估計** | **50～300 ms** |
 
-結論：只要雲端推論能壓到 1 秒內，多付這些網路時間仍然大贏本地的 3.4 秒。
+結論：只要雲端推論能壓到 1 秒內，多付這些網路時間仍然比本地的 1.9 秒快。
+當初分析用的 3.4 秒是 640×656 的測試圖；實際 Pi 畫面（640×362）只要 1.9 秒，所以搬到雲端的效益比當初估計的小。
+（聯測時機器人上 WiFi 的 `network_ms` p50 為 103 ms，走外網只會更高。）
 
 協定不需要改：`request_id` 對應、只處理最新一筆、逾時重送、TCP 自動重連都已經實作。
 client 換 server 只是改 `vlm.endpoint`。
@@ -132,7 +83,7 @@ client 換 server 只是改 `vlm.endpoint`。
 
 | 路線 | 做法 | 評估 |
 |---|---|---|
-| **CPU 路線（先做）** | 不設 `LA_DEVICE`，用 CPU backend | 零 backend 工作量，最快拿到基準線。MI300X 機器通常配 EPYC，記憶體頻寬遠高於筆電，有機會直接贏過 3.4 秒 |
+| **CPU 路線（先做）** | 不設 `LA_DEVICE`，用 CPU backend | 零 backend 工作量，最快拿到基準線。MI300X 機器通常配 EPYC，記憶體頻寬遠高於筆電，有機會贏過本地的 1.9 秒 |
 | **Vulkan 路線** | 沿用現有 Dockerfile（`-DLA_GGML_VULKAN=ON`） | MI300X 是 gfx942 純運算卡，雲端映像通常只有 ROCm 沒有 Mesa。**能不能跑要上機驗證** |
 | **HIP 路線** | ggml 上游有 `GGML_HIP`。LA 沒包裝這個選項，但它把 ggml 當子專案，可直接傳 `-DGGML_HIP=ON -DAMDGPU_TARGETS=gfx942` | 中等工作量，可能要改 CMake。Vulkan 不行就走這條 |
 | **vLLM 路線（換模型）** | 改用 Qwen2.5-VL 這類原生支援 grounding 的模型，跑 vLLM ROCm | ROCm 支援最成熟，但等於換掉整個 VLM，框的品質要全部重新驗證。最後手段 |
@@ -172,7 +123,7 @@ client 換 server 只是改 `vlm.endpoint`。
 - [ ] **3. 建輕量 image 並量 CPU 基準（CPU 路線）**
       複製 Dockerfile，移除 torch / torchvision / sam2 / pyrealsense2 相關層，
       跑 `python -m scripts.smoke_pipeline <image> --target "..." --repeat 5`，
-      比對本地的 3.4 秒。
+      用同樣 640×362 的圖比對本地的 1.9 秒（推論時間和像素數相關，尺寸要一致才能比）。
 
 - [ ] **4. 依步驟 2 的結果試 Vulkan 或 HIP**，量同一組數字。
 
