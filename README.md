@@ -25,7 +25,7 @@ server 依上級描述（例如 `the white paper cup`）用 **LocateAnything-3B*
 ## 部署（Hackathon-gpu）
 
 server 跑在 `wildbot@192.168.50.125:~/Documents/vlm-server`（ssh alias `Hackathon-gpu`），
-那是這個 repo 的 git 工作目錄。模型不在 repo 裡，放在 `~/models/vlm`（`.env` 的 `LOCATE_MODELS_DIR`）。
+那是這個 repo 的 git 工作目錄。模型不在 repo 裡，放在 `~/Documents/vlm`（`.env` 的 `LOCATE_MODELS_DIR`）。
 
 ### 日常部署
 

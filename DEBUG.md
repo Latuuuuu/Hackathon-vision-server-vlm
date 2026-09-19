@@ -50,7 +50,7 @@ ssh Hackathon-gpu 'cat ~/Documents/vlm-server/output/DEPLOYED'
 
 build 或測試失敗時 `deploy.sh` 會中止，**不會重啟**，server 繼續跑舊版本。
 
-- 模型放在 `~/models/vlm`，由 `.env` 的 `LOCATE_MODELS_DIR` 指定。它和 V3 資料夾的模型是 hardlink，刪掉 V3 資料夾也不影響。沒有模型時可用 `docker compose run --rm models` 下載。
+- 模型放在 `~/Documents/vlm`（2026-09-19 從 `~/models/vlm` 搬來），由 `.env` 的 `LOCATE_MODELS_DIR` 指定；搬移模型後一定要同步改 `.env`，否則容器會找不到模型（`model_error: Missing LocateAnything model`）。它和 V3 資料夾的模型是 hardlink，刪掉 V3 資料夾也不影響。沒有模型時可用 `docker compose run --rm models` 下載。
 - `.env`、`output/` 被 gitignore，部署不會動到。可設定的項目見 `.env.example`。
 - **重啟後描述會消失**，記得重設（或在 `.env` 設 `VLM_INITIAL_QUERY`）。
 
