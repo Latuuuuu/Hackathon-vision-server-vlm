@@ -245,15 +245,23 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
 
 ## 6. V3 舊程式整理
 
-> 狀態：**完成**（2026-09-19，待使用者 commit 與部署）。
+> 狀態：**完成並已部署**（2026-09-19，commit `18a6d26`）。
 
 - 搬進 `vlm_server/`：`locator.py`（原 `app/models.py` 的 `Locator` + `app/core.py` 的 `valid_box`）、`gpu_check.py`、`gpu_probe.py`。
 - 刪除：`app/`、`npu/`、V3 的 Dockerfile 變體與 compose 覆寫檔、V3 的腳本與測試、`README_V3.md`、`VALIDATION.md`、`reference/`。
   `valid_box` 與 `check_gpu` 的測試已移到 `tests/test_vlm_server.py`。
 - compose 合併成單一 `compose.yaml`：service `server`、容器 `vlm-server`，拿掉 `privileged` 與 USB（V3 相機用的）。
 - Dockerfile 前半段（locate build、apt、ROCm torch、SAM2）沒動，讓 build 走快取；apt 清單裡多餘的 `libusb`、`libgl1` 留待之後需要重建時再清。
-- 部署後要確認：拿掉 `privileged` 後 Vulkan 仍然找得到 Radeon 860M，SAM2 mask 模式仍然可用（見 DEBUG.md）。
+- 部署後確認（2026-09-19）：
+  - 容器 `vlm-server` 運作中，`privileged=false`，裝置只掛 `/dev/kfd`、`/dev/dri`；舊容器 `vlm-server-tracker-1` 已被 `--remove-orphans` 移除。
+  - Vulkan 仍然找得到 Radeon 860M（`ggml_vulkan: Found 1 Vulkan devices`）。
+  - SAM2 mask 模式正常（拿掉 opencv 後）：`smoke_pipeline --mask` 在 dogs-640 上 `FOUND`，SAM 分數 0.97，暖機後 Locate 1.90 s + SAM 0.66 s。
 
 ## 7. 其他注意事項
 
 - **Hackathon-gpu 上有其他容器**：2026-09-19 看到 `mc-main-nav-engine`、`mc-main-nav-map`、`mc-main-nav-mocks` 在跑（不是這個專案的）。可能搶 CPU／GPU，量測延遲或跑評估前要先確認。
+
+## 代辦筆記
+- [x] buffer 這個目標物是否有找到過，BT engine 會需要這個資訊，需要在它請求的時候回覆它；出現新的目標物描述時清空 buffer。
+  → 已實作 `GET /api/target`（2026-09-19，待部署），規格見 vlm_transport.md §4.6。
+  同樣的描述重送也算新描述：`query_version` +1、清空。

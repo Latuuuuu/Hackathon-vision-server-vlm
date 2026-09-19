@@ -27,10 +27,15 @@ def create_app(queries, stats, slot=None):
         queries.clear()
         return jsonify(current())
 
+    @app.get('/api/target')
+    def get_target():
+        """For the BT engine: has the current description been FOUND at least once?"""
+        return jsonify(queries.target())
+
     @app.get('/api/status')
     def status():
         result = stats.snapshot()
-        result.update(query=current(), dropped_requests=slot.dropped if slot else None)
+        result.update(query=current(), target=queries.target(), dropped_requests=slot.dropped if slot else None)
         return jsonify(result)
 
     return app

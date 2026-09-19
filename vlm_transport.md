@@ -188,16 +188,41 @@ server 不需要知道相機的原始解析度。
 
 | 方法 | 路徑 | Body | 回傳 |
 |---|---|---|---|
-| `POST` | `/api/query` | `{"text": "the red cup"}`（1～300 字） | `{"text", "query_version"}`；文字和目前相同時版本不變 |
-| `DELETE` | `/api/query` | — | 清空描述，版本 +1；之後 detect 回 `NO_QUERY` |
+| `POST` | `/api/query` | `{"text": "the red cup"}`（1～300 字） | `{"text", "query_version"}`。**每次 POST 都當成新任務**：版本 +1，「是否找到過」清空；文字和目前相同也一樣（2026-09-19 起） |
+| `DELETE` | `/api/query` | — | 清空描述，版本 +1，「是否找到過」清空；之後 detect 回 `NO_QUERY` |
 | `GET` | `/api/query` | — | 目前的 `{"text", "query_version"}` |
-| `GET` | `/api/status` | — | 模型狀態、最近 50 筆的 `locate_ms` / `sam_ms` / `server_ms`、被丟棄的舊請求數 |
+| `GET` | `/api/target` | — | 目前描述是否找到過，見 4.6 |
+| `GET` | `/api/status` | — | 模型狀態、最近 50 筆的 `locate_ms` / `sam_ms` / `server_ms`、被丟棄的舊請求數、`target`（同 4.6） |
 
 ```bash
 curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/json' -d '{"text":"the red cup"}'
 ```
 
 `query_version` 在 server 重啟後會從 0 重新開始。
+
+### 4.6 目標是否找到過（給 BT engine）
+
+BT engine 用 `GET /api/target` 詢問：目前這個描述，VLM 有沒有找到過。
+
+```bash
+curl http://192.168.50.125:8080/api/target
+```
+
+```json
+{"text": "the paper water cup", "query_version": 3, "found": true}
+```
+
+| 欄位 | 說明 |
+|---|---|
+| `text` | 目前的描述；沒有描述時是 `null` |
+| `query_version` | 目前描述的版本 |
+| `found` | 這個描述設定之後，任何一筆 detect 回過 `FOUND` 就是 `true` |
+
+- **清空時機**：`POST /api/query`（包括送一樣的文字）、`DELETE /api/query`、server 重啟（只存在記憶體）。
+- **BT engine 要比對 `query_version`**：`POST /api/query` 會回傳新的版本號；之後讀 `/api/target` 時，版本一樣才代表是在回答自己送的描述。
+- **換描述前開始跑的推論不算數**：推論約 1.9 秒，這段時間描述可能被換掉。server 只在「推論開始時的版本 = 目前版本」時才記錄 `FOUND`，所以舊描述晚回來的結果不會讓新描述變成 `found: true`。
+- `found` 只代表「找到過」，不代表現在還在畫面裡。
+- VLM 會誤抓外觀相似的物件（TODO.md 第 3 節），一次誤抓也會讓 `found` 變成 `true`。
 
 ## 5. 時間差處理（client 端）
 

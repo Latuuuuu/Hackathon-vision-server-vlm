@@ -235,6 +235,7 @@ docker logs -f --tail 50 vlm-server
 
 # 描述
 curl -s localhost:8080/api/query
+curl -s localhost:8080/api/target      # 目前描述是否找到過（給 BT engine）
 curl -s -X POST localhost:8080/api/query -H 'Content-Type: application/json' -d '{"text":"the red cup"}'
 curl -s -X DELETE localhost:8080/api/query
 

@@ -46,16 +46,31 @@ class Protocol(unittest.TestCase):
 
 
 class Query(unittest.TestCase):
-    def test_version_changes_only_on_new_text(self):
+    def test_every_set_is_a_new_version(self):
         store = QueryStore()
         self.assertEqual(store.get(), (None, 0))
         self.assertEqual(store.set(' cup '), 1)
-        self.assertEqual(store.set('cup'), 1)
-        self.assertEqual(store.set('red cup'), 2)
-        self.assertEqual(store.clear(), 3)
-        self.assertEqual(store.clear(), 3)
+        self.assertEqual(store.get(), ('cup', 1))
+        self.assertEqual(store.set('cup'), 2)  # same text re-sent = new task
+        self.assertEqual(store.set('red cup'), 3)
+        self.assertEqual(store.clear(), 4)
+        self.assertEqual(store.clear(), 4)
         with self.assertRaises(ValueError):
             store.set('  ')
+
+    def test_found_is_tied_to_version(self):
+        store = QueryStore()
+        self.assertFalse(store.mark_found(0))  # no description yet
+        version = store.set('cup')
+        self.assertFalse(store.target()['found'])
+        self.assertFalse(store.mark_found(version - 1))  # stale result
+        self.assertTrue(store.mark_found(version))
+        self.assertEqual(store.target(), dict(text='cup', query_version=version, found=True))
+        store.set('cup')
+        self.assertFalse(store.target()['found'])
+        store.mark_found(store.get()[1])
+        store.clear()
+        self.assertEqual(store.target(), dict(text=None, query_version=store.get()[1], found=False))
 
     def test_http_api(self):
         store = QueryStore()
@@ -63,6 +78,17 @@ class Query(unittest.TestCase):
         self.assertEqual(client.post('/api/query', json=dict(text='cup')).get_json()['query_version'], 1)
         self.assertEqual(client.post('/api/query', json={}).status_code, 400)
         self.assertEqual(client.delete('/api/query').get_json(), dict(text=None, query_version=2))
+
+    def test_http_target(self):
+        store = QueryStore()
+        client = create_app(store, Stats()).test_client()
+        self.assertEqual(client.get('/api/target').get_json(), dict(text=None, query_version=0, found=False))
+        client.post('/api/query', json=dict(text='cup'))
+        store.mark_found(1)
+        self.assertEqual(client.get('/api/target').get_json(), dict(text='cup', query_version=1, found=True))
+        self.assertTrue(client.get('/api/status').get_json()['target']['found'])
+        client.post('/api/query', json=dict(text='cup'))  # same text clears
+        self.assertEqual(client.get('/api/target').get_json(), dict(text='cup', query_version=2, found=False))
 
 
 class Geometry(unittest.TestCase):
@@ -181,6 +207,27 @@ class EndToEnd(unittest.TestCase):
                 self.assertGreaterEqual(reply['server_ms'], 250)
             else:
                 self.assertEqual(extra, [])
+
+    def test_found_marks_target(self):
+        self.stats.model_ready = True
+        self.queries.set('nothing')
+        self.detect(1)
+        self.assertEqual(self.recv()[0]['status'], P.NOT_FOUND)
+        self.assertFalse(self.queries.target()['found'])
+        self.queries.set('cup')
+        self.detect(2)
+        self.assertEqual(self.recv()[0]['status'], P.FOUND)
+        self.assertTrue(self.queries.target()['found'])
+
+    def test_late_found_does_not_mark_new_description(self):
+        self.stats.model_ready = True
+        old = self.queries.set('cup')
+        self.detect(1)
+        time.sleep(0.1)  # worker is inside find() for the old description
+        new = self.queries.set('cup')  # new task while inference runs
+        reply = self.recv()[0]
+        self.assertEqual((reply['status'], reply['query_version']), (P.FOUND, old))
+        self.assertEqual(self.queries.target(), dict(text='cup', query_version=new, found=False))
 
     def test_only_newest_pending_request_is_processed(self):
         self.stats.model_ready = True

@@ -172,6 +172,9 @@ class Worker:
                     payload = detection.mask_png
                     reply = dict(status=P.FOUND, bbox=detection.bbox, score=detection.score,
                                  num_candidates=detection.num_candidates, has_mask=payload is not None)
+                    # Use the version this inference started with, so a FOUND for an
+                    # old description never marks a newer one as found.
+                    self.server.queries.mark_found(version)
         server_ms = (time.monotonic() - received) * 1000
         header_out = P.response(request_id, query_version=version, server_ms=server_ms, **reply)
         self.server.stats.record(request_id=request_id, status=header_out['status'], server_ms=round(server_ms, 1),
