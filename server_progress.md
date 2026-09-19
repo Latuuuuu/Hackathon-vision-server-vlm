@@ -35,7 +35,7 @@
 | 推論後端 | locate-anything.cpp（ggml），**Vulkan**（RADV GFX1152） |
 | `LA_MODE` | **`fast`** |
 | SAM2 mask | **關閉**（`VLM_RETURN_MASK=0`），只回 bbox，`score` 固定 `-1` |
-| 容器 | `vlm-server-tracker-1`，`restart=unless-stopped`，主機開機會自動啟動 |
+| 容器 | `vlm-server`（2026-09-19 從 `vlm-server-tracker-1` 改名），`restart=unless-stopped`，主機開機會自動啟動 |
 | 同時推論數 | 1。多個 client 同時送圖會輪流排隊（第 3 節） |
 
 ## 3. 推論 1.9 秒是不是穩定值？

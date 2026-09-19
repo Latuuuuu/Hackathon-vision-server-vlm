@@ -1,4 +1,4 @@
-"""Keep native probe faults outside the web process."""
+"""Keep native probe faults outside the server process."""
 import json
 import os
 import subprocess
@@ -6,7 +6,7 @@ import sys
 
 
 def check_gpu():
-    result = subprocess.run([sys.executable, '-u', '-X', 'faulthandler', '-m', 'scripts.gpu_probe'],
+    result = subprocess.run([sys.executable, '-u', '-X', 'faulthandler', '-m', 'vlm_server.gpu_probe'],
                             capture_output=True, text=True,
                             timeout=int(os.getenv('GPU_PROBE_TIMEOUT', '180')))
     if result.returncode:

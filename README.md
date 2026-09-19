@@ -13,14 +13,14 @@ server 依上級描述（例如 `the white paper cup`）用 **LocateAnything-3B*
 
 | 路徑 | 內容 |
 |---|---|
-| `vlm_server/` | server 本體：ZMQ ROUTER（5555）、HTTP 描述 API（8080）、推論 pipeline |
-| `app/` | 從 V3 繼承的程式。`vlm_server` 目前用到 `models.py`（Locator）、`core.py`、`gpu_check.py` |
+| `vlm_server/` | server 本體：ZMQ ROUTER（5555）、HTTP 描述 API（8080）、推論 pipeline、LocateAnything 的 ctypes 包裝（`locator.py`）、SAM2 用的 GPU 檢查 |
 | `tools/` | `mock_server.py`（不需要模型的假 server）、`test_client.py`（量延遲、畫結果） |
-| `scripts/` | `smoke_pipeline.py`（在容器內用真模型跑單張圖）等 |
+| `scripts/` | `smoke_pipeline.py`（在容器內用真模型跑單張圖）、`download_models.py`（下載模型） |
 | `tests/` | 單元測試（`tests/test_vlm_server.py` 不需要 GPU 與模型） |
 | `deploy/` | `deploy.sh`：在 Hackathon-gpu 上部署 |
 | `eval/images/` | 現場實拍的評估圖片 |
-| `compose.yaml` + `compose.rocm.yaml` + `compose.vlm.yaml` | 三份一起用才是 VLM server；`compose.vlm.yaml` 設定 port、`LA_MODE` 等 |
+| `compose.yaml` | 唯一的 compose 檔：service `server`（容器 `vlm-server`）、`models`（下載模型用） |
+| `requirements.txt` / `requirements-dev.txt` | server image 的相依套件 / 本機開發多加的套件 |
 
 ## 部署（Hackathon-gpu）
 
@@ -59,13 +59,14 @@ deploy/deploy.sh
 ```
 
 模型檔：`locate-anything-q8_0.gguf`（5.83 GiB），mask 模式另需 `sam2.1_hiera_tiny.pt`，放進 `LOCATE_MODELS_DIR`。
+沒有的話先 build 一次 image（`docker compose build server`），再用 `docker compose run --rm models` 下載，已經存在的檔案不會重下。
 
 ## 本機開發
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install pyzmq numpy opencv-python-headless Pillow Flask waitress
-.venv/bin/python -m unittest tests.test_vlm_server tests.test_core
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m unittest tests.test_vlm_server
 
 # 不需要模型的假 server，給 client 開發用
 .venv/bin/python -m tools.mock_server --query "the cup" --delay 1.9

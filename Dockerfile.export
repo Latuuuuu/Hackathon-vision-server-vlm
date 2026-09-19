@@ -1,5 +1,0 @@
-ARG TRACKER_IMAGE=locate-sam2:cpu-v2
-FROM ${TRACKER_IMAGE}
-# Separate image: generic ORT must never overwrite AMD's Vitis AI runtime.
-RUN pip install --no-cache-dir 'onnx>=1.16,<2' 'onnxruntime>=1.20,<2'
-CMD ["python", "-m", "scripts.export_encoder"]

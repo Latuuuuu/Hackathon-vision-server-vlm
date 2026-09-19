@@ -25,12 +25,10 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY --from=locate /artifacts /opt/locate
 WORKDIR /app
-COPY app /app/app
+COPY vlm_server /app/vlm_server
 COPY scripts /app/scripts
 COPY tests /app/tests
-COPY npu /app/npu
-COPY vlm_server /app/vlm_server
 COPY tools /app/tools
 RUN pip check && pip freeze > /opt/python-packages.txt
 ENV LOCATE_LIBRARY=/opt/locate/liblocate_anything.so
-CMD ["python", "-m", "app.server"]
+CMD ["python", "-m", "vlm_server.main"]

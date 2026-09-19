@@ -5,7 +5,7 @@
 3. [嚴格匹配、不硬找](#3-嚴格匹配不硬找)（已調查，待實作）
 4. [現場評估集與評估腳本](#4-現場評估集與評估腳本)（待實作，第 3、5 節都靠它）
 5. [解析度掃描](#5-解析度掃描)（待實作）
-6. [V3 舊程式整理](#6-v3-舊程式整理)（暫緩）
+6. [V3 舊程式整理](#6-v3-舊程式整理)（完成，2026-09-19）
 7. [其他注意事項](#7-其他注意事項)
 
 ## 1. Client 交接策略：現有作法 vs 預追蹤
@@ -164,7 +164,7 @@ client 換 server 只是改 `vlm.endpoint`。
 | 找不到就不回 | 有 | `src/lm.cpp` 遇到 `IM_END` 或 `NULL_TOK` 就結束，可以回空結果。AR 路徑是 greedy argmax，logits 可取得 |
 | C API | — | `la_capi.h` 只有 box 和 `la_capi_get_detection_label`，沒有 score |
 
-另外，我們現在用的 prompt（`app/models.py` `Locator.locate`，寫死）是「物件偵測」模板：
+另外，我們現在用的 prompt（`vlm_server/locator.py` `Locator.locate`，寫死）是「物件偵測」模板：
 `Locate all the instances that matches the following description: {q}.`
 model card 另有給指代表達式（帶屬性的描述）用的模板：
 
@@ -184,12 +184,12 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
      存進 `Box`，新增 `float la_capi_get_detection_score(la_ctx*, int i)`（拿不到回 -1），也寫進回傳的 JSON。採用哪個定義看評估結果。
    - `LA_START_THRESH`：覆寫 0.7。
    - Dockerfile 加 build 參數，可以切回沒有 patch 的版本對照。
-2. **server 端串接**（`app/models.py` `Locator`、`vlm_server/pipeline.py`）：
+2. **server 端串接**（`vlm_server/locator.py` `Locator`、`vlm_server/pipeline.py`）：
    - `LA_PROMPT_TEMPLATE`：上表的名稱，或含 `{q}` 的自訂字串；預設 `detect`。
    - 回應的 `score` 改填 VLM 信心值（ZMQ 協定欄位不變，只改 vlm_transport.md 的語意說明）。
    - `VLM_MIN_SCORE`：所有框都低於門檻就回 `NOT_FOUND`；多個框時取 score 最高的（取代目前「取第一個」）。預設 0 = 不過濾。
    - 所有新設定的預設值都維持現在的行為。
-3. 用第 4 節的評估集選出 `LA_SYSTEM_PROMPT`、`LA_PROMPT_TEMPLATE`、`VLM_MIN_SCORE`，寫進 `compose.vlm.yaml`。
+3. 用第 4 節的評估集選出 `LA_SYSTEM_PROMPT`、`LA_PROMPT_TEMPLATE`、`VLM_MIN_SCORE`，寫進 `compose.yaml`。
 
 ### 風險
 
@@ -245,13 +245,14 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
 
 ## 6. V3 舊程式整理
 
-> 狀態：**暫緩**，等使用者決定要移到 `legacy/` 還是刪除。
+> 狀態：**完成**（2026-09-19，待使用者 commit 與部署）。
 
-- server 從 `~/Documents/vlm-server` 跑，V3 的容器沒有在跑。但 `vlm_server` 仍依賴幾個從 V3 繼承的檔案：
-  - `app/models.py`（`Locator`）
-  - `app/core.py`（`valid_box`）
-  - `app/gpu_check.py` + `scripts/gpu_probe.py`（只有 mask 模式用到）
-- 整理前先把這些搬進 `vlm_server/`，再處理其他檔案：NPU（`npu/`、`Dockerfile.npu*`、`compose.npu.yaml`）、Flask 網頁 demo（`app/server.py`、`app/static/`）、影片追蹤（`app/models.py` 的 `SegmentTracker`）、`Dockerfile.before-spirv-fix`、`Dockerfile.export`、`compose.attention.yaml`、`README_V3.md`、`VALIDATION.md`。
+- 搬進 `vlm_server/`：`locator.py`（原 `app/models.py` 的 `Locator` + `app/core.py` 的 `valid_box`）、`gpu_check.py`、`gpu_probe.py`。
+- 刪除：`app/`、`npu/`、V3 的 Dockerfile 變體與 compose 覆寫檔、V3 的腳本與測試、`README_V3.md`、`VALIDATION.md`、`reference/`。
+  `valid_box` 與 `check_gpu` 的測試已移到 `tests/test_vlm_server.py`。
+- compose 合併成單一 `compose.yaml`：service `server`、容器 `vlm-server`，拿掉 `privileged` 與 USB（V3 相機用的）。
+- Dockerfile 前半段（locate build、apt、ROCm torch、SAM2）沒動，讓 build 走快取；apt 清單裡多餘的 `libusb`、`libgl1` 留待之後需要重建時再清。
+- 部署後要確認：拿掉 `privileged` 後 Vulkan 仍然找得到 Radeon 860M，SAM2 mask 模式仍然可用（見 DEBUG.md）。
 
 ## 7. 其他注意事項
 

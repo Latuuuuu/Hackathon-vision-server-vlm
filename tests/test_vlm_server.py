@@ -1,16 +1,20 @@
 import contextlib
 import io
 import json
+import subprocess
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import zmq
 from PIL import Image
 
 from vlm_server import protocol as P
+from vlm_server.gpu_check import check_gpu
 from vlm_server.http_api import create_app
+from vlm_server.locator import valid_box
 from vlm_server.pipeline import Detection, TargetFinder, encode_mask_crop, to_pixel_box
 from vlm_server.query import QueryStore
 from vlm_server.zmq_server import Stats, Worker, ZmqServer
@@ -66,6 +70,12 @@ class Geometry(unittest.TestCase):
         self.assertEqual(to_pixel_box([10.4, 5.6, 20.2, 30.9], 64, 48), [10, 5, 21, 31])
         self.assertEqual(to_pixel_box([-5, -5, 100, 100], 64, 48), [0, 0, 64, 48])
 
+    def test_invalid_boxes_rejected(self):
+        for box in ([1, 2, 1, 5], [0, 0, float('nan'), 4], [1, 2]):
+            with self.assertRaises(ValueError):
+                valid_box(box, 640, 480)
+        self.assertEqual(valid_box([-2, -5, 700, 600], 640, 480), [0., 0., 639., 479.])
+
     def test_oversized_image_rejected_before_locate(self):
         finder = TargetFinder.__new__(TargetFinder)
         with self.assertRaises(ValueError):
@@ -78,6 +88,28 @@ class Geometry(unittest.TestCase):
         crop = np.asarray(Image.open(io.BytesIO(png)))
         self.assertEqual(crop.shape, (10, 10))
         self.assertTrue((crop == 255).all())
+
+
+class GpuCheck(unittest.TestCase):
+    """The GPU probe runs in a child process so a native crash cannot take the server down."""
+
+    @patch('vlm_server.gpu_check.subprocess.run')
+    def test_native_fault_is_not_success(self, run):
+        run.return_value = subprocess.CompletedProcess([], -11, 'FILL\n', 'Segmentation fault')
+        with self.assertRaisesRegex(RuntimeError, 'returncode=-11'):
+            check_gpu()
+
+    @patch('vlm_server.gpu_check.subprocess.run')
+    def test_empty_success_is_rejected(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, '', '')
+        with self.assertRaisesRegex(RuntimeError, 'without GPU_PASS'):
+            check_gpu()
+
+    @patch('vlm_server.gpu_check.subprocess.run')
+    def test_verified_child_result(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, 'GPU_PASS ' + json.dumps({'arch': 'gfx1152'}), '')
+        self.assertEqual(check_gpu()['arch'], 'gfx1152')
+        self.assertIn('vlm_server.gpu_probe', run.call_args.args[0])
 
 
 class SlowFinder:

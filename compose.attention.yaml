@@ -1,5 +1,0 @@
-# Opt-in benchmark only. ROCm reports this gfx1152 fast-attention path as experimental.
-services:
-  tracker:
-    environment:
-      TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL: "1"

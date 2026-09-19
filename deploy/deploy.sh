@@ -21,7 +21,7 @@ cd "$DEPLOY_REPO"
 REF="${1:-origin/main}"
 PORT="${VLM_HTTP_PORT:-8080}"
 READY_TIMEOUT_S="${READY_TIMEOUT_S:-120}"
-COMPOSE=(docker compose -f compose.yaml -f compose.rocm.yaml -f compose.vlm.yaml)
+COMPOSE=(docker compose)
 
 step() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -39,20 +39,20 @@ COMMIT="$(git rev-parse HEAD)"
 echo "$(git log -1 --format='%h %s (%an, %cr)')"
 
 step "build image"
-"${COMPOSE[@]}" build tracker
+"${COMPOSE[@]}" build server
 
 step "unit tests in the new image"
-"${COMPOSE[@]}" run --rm --no-deps tracker python -m unittest tests.test_vlm_server \
+"${COMPOSE[@]}" run --rm --no-deps server python -m unittest tests.test_vlm_server \
   || die "tests failed; server NOT restarted (still running the previous image)"
 
 step "restart server"
-"${COMPOSE[@]}" up -d tracker
+"${COMPOSE[@]}" up -d --remove-orphans server
 
 step "wait for model_ready (up to ${READY_TIMEOUT_S}s)"
 deadline=$((SECONDS + READY_TIMEOUT_S))
 until curl -sf "http://localhost:${PORT}/api/status" | grep -q '"model_ready": *true'; do
   if (( SECONDS >= deadline )); then
-    docker logs --tail 40 vlm-server-tracker-1 >&2 || true
+    docker logs --tail 40 vlm-server >&2 || true
     die "model not ready after ${READY_TIMEOUT_S}s"
   fi
   sleep 2

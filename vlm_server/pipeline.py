@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from PIL import Image
 
-from app.core import valid_box
+from .locator import valid_box
 
 
 @dataclass
@@ -47,7 +47,7 @@ class MaskPredictor:
         if self.device not in ('cpu', 'cuda'):
             raise ValueError('SAM_DEVICE must be cpu or cuda (HIP uses cuda API)')
         if self.device == 'cuda':
-            from app.gpu_check import check_gpu
+            from .gpu_check import check_gpu
             check_gpu()
         torch.set_num_threads(int(os.getenv('CPU_THREADS', '6')))
         ckpt = os.getenv('SAM_CHECKPOINT', '/models/sam2.1_hiera_tiny.pt')
@@ -81,7 +81,7 @@ class MaskPredictor:
 
 class TargetFinder:
     def __init__(self, return_mask=False):
-        from app.models import Locator
+        from .locator import Locator
         self.locator = Locator()
         self.masker = MaskPredictor() if return_mask else None
 

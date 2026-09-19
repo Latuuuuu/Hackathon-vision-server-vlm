@@ -9,7 +9,7 @@
 | 項目 | 狀態 | 證據 |
 |---|---|---|
 | server 容器 | 執行中，已連續跑 14 小時以上 | `vlm-server-tracker-1`，`Up 14 hours`，對外開 `5555`、`8080` |
-| 程式版本 | 和本機 repo 一致 | `vlm_server/*.py`、`compose.vlm.yaml` 的 md5 兩邊相同 |
+| 程式版本 | 和本機 repo 一致 | `vlm_server/*.py`、`compose.vlm.yaml` 的 md5 兩邊相同（2026-09-19 查核當時；之後 compose 已合併成單一 `compose.yaml`、容器改名 `vlm-server`） |
 | 開機自動啟動 | 會 | 容器 `restart=unless-stopped`，`docker.service` 為 `enabled` |
 | 模型 | 就緒，`LA_MODE=fast`，只回 bbox | `/api/status`：`model_ready: true` |
 | Pi → server 連線 | 通 | Pi（`192.168.50.67`，wlan0）連得到 `tcp 5555`，`GET /api/query` 正常 |
@@ -26,7 +26,7 @@
 | **server 重啟後描述會消失**，`query_version` 從 0 重算 | 重啟後一律回 `NO_QUERY`，直到有人重新設定描述 | 聯測時用 `.env` 設 `VLM_INITIAL_QUERY`（見第 5 節），或重啟後馬上 `POST /api/query` |
 | **重啟後版本號可能撞號** | 重啟前是 v1「the dog」，重啟後設「the cup」又是 v1。如果 client 剛好沒看到中間的 v0，會誤以為描述沒變 | client 每 2 秒 ping 一次，只要重啟後等 2 秒以上再設描述，client 就會看到 1→0→1 的變化。根治要改 server（見第 7 節） |
 | **GPU 被其他工作占用** | 推論從 3.4 秒變慢，client 開始逾時 | 聯測期間不要在 Hackathon-gpu 上跑 benchmark 或 V3 tracker。之前兩組 benchmark 同時跑時，數字就互相干擾過 |
-| **V3 tracker 也用 8080** | 兩者同時啟動會搶 port | 聯測期間不要啟動 `~/Documents/locate-sam2-d435i-v3` 的 compose |
+| **其他服務占用 5555／8080** | server 起不來（port 衝突） | Hackathon-gpu 上原本的 V3 demo（`~/Documents/locate-sam2-d435i-v3`）也用 8080，不要同時啟動；啟動失敗時用 `ss -ltnp` 查是誰占用 |
 | **沒有認證** | 同網段任何人都能改描述或送圖 | 內網聯測可以接受；上公網前必須處理（見 [TODO.md](TODO.md) 第 2 節） |
 
 ## 2. 部署與更新流程（server 端）
@@ -50,7 +50,7 @@ ssh Hackathon-gpu 'cat ~/Documents/vlm-server/output/DEPLOYED'
 
 build 或測試失敗時 `deploy.sh` 會中止，**不會重啟**，server 繼續跑舊版本。
 
-- 模型放在 `~/models/vlm`（和 V3 資料夾的模型是 hardlink，不佔額外空間），由 `.env` 的 `LOCATE_MODELS_DIR` 指定。
+- 模型放在 `~/models/vlm`，由 `.env` 的 `LOCATE_MODELS_DIR` 指定。它和 V3 資料夾的模型是 hardlink，刪掉 V3 資料夾也不影響。沒有模型時可用 `docker compose run --rm models` 下載。
 - `.env`、`output/` 被 gitignore，部署不會動到。可設定的項目見 `.env.example`。
 - **重啟後描述會消失**，記得重設（或在 `.env` 設 `VLM_INITIAL_QUERY`）。
 
@@ -184,7 +184,7 @@ curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/
 |---|---|---|
 | 沒有描述 | `curl -X DELETE http://192.168.50.125:8080/api/query` | client 收到 `NO_QUERY`，退避 5 秒再送 |
 | 換描述 | `POST /api/query` 換一個文字 | `query_version` +1，client 馬上送圖，新 bbox 回來後替換 target |
-| server 重啟 | `ssh Hackathon-gpu 'docker restart vlm-server-tracker-1'` | 模型載入期間 client 收到 `ERROR`（`model loading`）；之後因為描述消失而收到 `NO_QUERY`，**要重設描述** |
+| server 重啟 | `ssh Hackathon-gpu 'docker restart vlm-server'` | 模型載入期間 client 收到 `ERROR`（`model loading`）；之後因為描述消失而收到 `NO_QUERY`，**要重設描述** |
 | 目標不在畫面 | 把目標物拿走 | `NOT_FOUND`，tracker 繼續追舊 target |
 | 斷網 | 暫時關掉 server 的 WiFi，或 `docker stop` | client 逾時（6 秒）、ZMQ 自動重連；恢復後不用重啟 bridge 就能繼續 |
 
@@ -213,7 +213,7 @@ L4 實際觀察（從 bridge log 推斷當時做了這些測試，時間為 UTC�
 | client 全部逾時，ping 也逾時 | IP 變了、server 沒開、網路不通 | L1；`ssh Hackathon-gpu 'ip -4 addr show wlp98s0; docker ps'` |
 | ping 正常，detect 全部逾時 | 推論比 `timeout_s` 慢 | server `/api/status` 的 `server_ms`；檢查 `la_mode` 是不是被改成 `slow`；檢查 GPU 有沒有被占用（見第 5 節） |
 | 一直收到 `NO_QUERY` | 沒設描述，或 server 重啟後描述消失 | `curl http://192.168.50.125:8080/api/query`，`text` 是 `null` 就重設 |
-| 一直收到 `ERROR: model loading` | 模型還在載入，或載入失敗 | `/api/status` 的 `model_error`；`docker logs --tail 100 vlm-server-tracker-1` |
+| 一直收到 `ERROR: model loading` | 模型還在載入，或載入失敗 | `/api/status` 的 `model_error`；`docker logs --tail 100 vlm-server` |
 | `ERROR: image larger than 1280px` | client 沒縮圖 | client 的 `vlm.upload_max_width` 要是 640 |
 | `server_ms` 忽高忽低，大約是兩倍，但 `/api/status` 的 `locate_ms` 很穩定 | 有其他 client 同時在送圖，請求在排隊 | 看 `recent` 裡有沒有交錯的 request_id；聯測時關掉筆電上的 `test_client` |
 | `server_ms` 突然從 3.4 秒跳到 7～10 秒 | `LA_MODE` 變成 `slow`／`hybrid`，或 GPU 被其他程式占用 | `/api/status` 的 `model_info.la_mode`；`docker ps` 看有沒有其他容器 |
@@ -222,17 +222,16 @@ L4 實際觀察（從 bridge log 推斷當時做了這些測試，時間為 UTC�
 | `FOUND` 但框到別的東西 | 描述太模糊，或場上有多個符合描述的物件（server 只回第一個） | `/api/status` 看 `num_candidates`；描述寫具體一點（顏色、位置） |
 | `FOUND` 框也對，但 tracker 追到背景 | bbox 比物件大很多，client 的深度中位數落在背景 | 開 mask 模式試試（第 5 節）；或改善 client 的深度切割（client_progress.md 第 6 節已列入） |
 | 換了描述，client 沒反應 | 重啟後版本號撞號（第 1 節） | 看 client 記錄的 `query_version`；先 `DELETE` 再 `POST`，強迫版本號變兩次 |
-| 主機重開機後 server 沒起來 | docker 沒啟動，或容器啟動失敗 | `systemctl status docker`；`docker ps -a`；`docker logs vlm-server-tracker-1` |
+| 主機重開機後 server 沒起來 | docker 沒啟動，或容器啟動失敗 | `systemctl status docker`；`docker ps -a`；`docker logs vlm-server` |
 
 ## 5. 常用指令（在 Hackathon-gpu 上）
 
 ```bash
 cd ~/Documents/vlm-server
-export C="docker compose -f compose.yaml -f compose.rocm.yaml -f compose.vlm.yaml"
 
 # 狀態與 log
 curl -s localhost:8080/api/status | python3 -m json.tool
-docker logs -f --tail 50 vlm-server-tracker-1
+docker logs -f --tail 50 vlm-server
 
 # 描述
 curl -s localhost:8080/api/query
@@ -244,7 +243,7 @@ cat /sys/class/drm/card1/device/gpu_busy_percent
 docker ps
 
 # 重啟
-docker restart vlm-server-tracker-1
+docker restart vlm-server
 ```
 
 **切換模式要寫進 `.env`**，只在指令前面加環境變數的話，下次 `up -d` 會變回預設值：
@@ -258,8 +257,8 @@ VLM_RETURN_MASK=1
 # 重啟後自動帶入的描述
 VLM_INITIAL_QUERY="the red cup"
 
-# 套用
-$C up -d tracker
+# 套用（這只會重建容器，不會重 build image）
+docker compose up -d server
 ```
 
 ## 6. 回覆 client_progress.md 第 5 節
