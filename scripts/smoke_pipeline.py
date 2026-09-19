@@ -33,7 +33,7 @@ for i in range(args.repeat):
     total = (time.monotonic() - start) * 1000
     row = dict(run=i, total_ms=round(total, 1), found=result is not None)
     if result:
-        row.update(bbox=result.bbox, score=result.score, candidates=result.num_candidates,
+        row.update(bbox=result.bbox, score=result.score, sam_score=result.sam_score, candidates=result.num_candidates,
                    **{k: round(v, 1) for k, v in result.timings.items()})
         x1, y1, x2, y2 = result.bbox
         assert 0 <= x1 < x2 <= image.width and 0 <= y1 < y2 <= image.height, result.bbox

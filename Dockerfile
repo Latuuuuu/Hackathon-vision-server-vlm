@@ -3,6 +3,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends git cmake ninja-build build-essential libvulkan-dev glslc spirv-headers glslang-tools ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 RUN git clone --recursive --branch v0.1.0 https://github.com/mudler/locate-anything.cpp.git locate
+# LA_PATCH=1: LA_SYSTEM_PROMPT and per-box scores (TODO.md section 3); 0 builds upstream for comparison.
+ARG LA_PATCH=1
+COPY deploy/patches /patches
+RUN if [ "$LA_PATCH" = 1 ]; then git -C locate apply /patches/locate-anything-v0.1.0.patch; fi
 RUN cmake -S locate -B locate/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLA_BUILD_TESTS=OFF -DLA_BUILD_CLI=ON -DLA_SHARED=ON -DLA_GGML_VULKAN=ON && cmake --build locate/build -j 4
 RUN mkdir /artifacts && find locate/build -name '*.so*' -type f -exec cp {} /artifacts/ \; && git -C locate rev-parse HEAD > /artifacts/locate-revision.txt
 

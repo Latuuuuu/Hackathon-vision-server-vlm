@@ -2,9 +2,9 @@
 
 1. [Client 交接策略：現有作法 vs 預追蹤](#1-client-交接策略現有作法-vs-預追蹤)（現有作法已上線，B 待數據決定）
 2. [把 VLM 搬到雲端 AMD MI300X](#2-把-vlm-搬到雲端-amd-mi300x)（2026-09-19 重啟，和第 5 節並行）
-3. [嚴格匹配、不硬找](#3-嚴格匹配不硬找)（已調查，待實作）
-4. [現場評估集與評估腳本](#4-現場評估集與評估腳本)（待實作，第 3、5 節都靠它）
-5. [解析度掃描](#5-解析度掃描)（待實作）
+3. [嚴格匹配、不硬找](#3-嚴格匹配不硬找)（第 0、1 輪完成，暫定設定，待另一批圖驗證）
+4. [現場評估集與評估腳本](#4-現場評估集與評估腳本)（完成：84 題）
+5. [解析度掃描](#5-解析度掃描)（完成：維持 640 寬）
 6. [V3 舊程式整理](#6-v3-舊程式整理)（完成，2026-09-19）
 7. [其他注意事項](#7-其他注意事項)
 
@@ -146,7 +146,7 @@ client 換 server 只是改 `vlm.endpoint`。
 
 ## 3. 嚴格匹配、不硬找
 
-> 狀態：**已調查，待實作**（2026-09-19）。
+> 狀態（2026-09-20）：**patch 已在 GPU 上驗證，第 0、1 輪完成，暫定設定待另一批圖驗證**。結果見「評估結果」，進度見「執行進度」。
 
 ### 問題
 
@@ -160,7 +160,8 @@ client 換 server 只是改 `vlm.endpoint`。
 | 項目 | 模型本身 | locate-anything.cpp v0.1.0 |
 |---|---|---|
 | system prompt | 有（Qwen2.5 chat template：system → user → assistant） | `src/prompt.cpp` 寫死成 `"You are a helpful assistant."`；影像 token 放在 user turn、query 前面；呼叫端只能改 query |
-| 信心值 | 有（token 機率） | `src/mtp.cpp` 平行框解碼時會算每個 token 的 softmax，框要被接受需要 `BOX_START` 機率 ≥ **0.7**、結尾分數 ≥ 0.2；但這些機率**沒有存進偵測結果** |
+| 信心值 | 有（token 機率） | `src/mtp.cpp` 平行框解碼時會算每個 token 的 softmax，但這些機率**沒有存進偵測結果**。（更正 2026-09-20：`BOX_START` ≥ 0.7 只用來判斷是不是 empty_box，**不是**接受框的門檻；框只要結尾分數 ≥ 0.2 就算合法） |
+| 什麼時候停止出框 | — | `src/lm.cpp` `decode_hybrid`：block 第 0 個位置的 **argmax** 是 `IM_END`/`NULL` 才停，沒有機率門檻。「再出一個框」只要比結束的機率高一點點，模型就會硬擠一個框出來，這就是「硬找」的來源 |
 | 找不到就不回 | 有 | `src/lm.cpp` 遇到 `IM_END` 或 `NULL_TOK` 就結束，可以回空結果。AR 路徑是 greedy argmax，logits 可取得 |
 | C API | — | `la_capi.h` 只有 box 和 `la_capi_get_detection_label`，沒有 score |
 
@@ -175,21 +176,77 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
 | `ground_single` | `Locate a single instance that matches the following description: {q}.` |
 | `region` | `Locate the region that matches the following description: {q}.` |
 
-### 做法
+### 做法（已實作，2026-09-20）
 
-1. **修改 locate-anything.cpp（用 patch 檔，不 fork）**：`deploy/patches/locate-anything-v0.1.0.patch`，Dockerfile 的 locate stage `git clone` 後 `git apply`，上游版本維持 v0.1.0。
-   動手前先讀 `src/boxes.cpp`、`src/engine.hpp`、`src/la_capi.cpp`，確認 `Box` 結構和偵測結果怎麼存。
-   - `LA_SYSTEM_PROMPT`：覆寫 system prompt；沒設時維持 `"You are a helpful assistant."`。
-   - 每個框的 score：MTP 路徑記錄 `BOX_START` 機率和座標 token 的 top-1 機率平均；AR 路徑記錄框開頭那一步的機率和座標 token 機率平均。
-     存進 `Box`，新增 `float la_capi_get_detection_score(la_ctx*, int i)`（拿不到回 -1），也寫進回傳的 JSON。採用哪個定義看評估結果。
-   - `LA_START_THRESH`：覆寫 0.7。
-   - Dockerfile 加 build 參數，可以切回沒有 patch 的版本對照。
-2. **server 端串接**（`vlm_server/locator.py` `Locator`、`vlm_server/pipeline.py`）：
+1. **patch locate-anything.cpp**：[deploy/patches/locate-anything-v0.1.0.patch](deploy/patches/locate-anything-v0.1.0.patch)。Dockerfile 的 locate stage 在 `git clone` v0.1.0 之後 `git apply`；`--build-arg LA_PATCH=0` 可以 build 回原版做對照。
+   - `LA_SYSTEM_PROMPT`：覆寫 system prompt，每次呼叫時讀取；沒設時維持 `"You are a helpful assistant."`。
+   - 每個框三個分數，存在 `Box`，由新的 `la_capi_get_detection_score(ctx, i, float out[3])` 取得，JSON 也有：
+     - `p_object`：1 − P(`<none>`)，取框的第一個座標位置，也就是模型「框出來 vs 說沒有」的取捨。**唯一有用的分數**（見下方「評估結果」）。
+     - `p_start`：`<box>` token 的機率。實測一律約 1.0，因為模型說「沒有」時也會先出 `<box>`。
+     - `p_coord`：4 個座標 token 機率的平均。
+     - MTP 取該 block 位置的 softmax，AR 取該步的 softmax。
+   - 原本規劃的 `LA_START_THRESH` **拿掉**：0.7 不是接受框的門檻（見上表更正），改由 server 端用 `VLM_MIN_SCORE` 過濾分數，效果一樣，而且調門檻不用重 build。
+   - 本機 CPU build 通過；patch 可以乾淨套用到 v0.1.0。**還沒在 Hackathon-gpu 上用實際模型驗證。**
+2. **server 端**（`vlm_server/locator.py`、`vlm_server/pipeline.py`）：
    - `LA_PROMPT_TEMPLATE`：上表的名稱，或含 `{q}` 的自訂字串；預設 `detect`。
-   - 回應的 `score` 改填 VLM 信心值（ZMQ 協定欄位不變，只改 vlm_transport.md 的語意說明）。
-   - `VLM_MIN_SCORE`：所有框都低於門檻就回 `NOT_FOUND`；多個框時取 score 最高的（取代目前「取第一個」）。預設 0 = 不過濾。
+   - `VLM_SCORE_FIELD`（`p_object`／`p_coord`／`p_start`，預設 `p_object`）、`VLM_MIN_SCORE`（預設 0，不過濾）。所有框都低於門檻就回 `NOT_FOUND`；有多個框時取分數最高的。原版 library 沒有分數，會照 Locate 的順序取第一個，和以前一樣。
+   - 設了 `VLM_MIN_SCORE` 但 library 沒有分數時，啟動就報錯，避免 server 永遠只回 `NOT_FOUND`。
+   - 回應的 `score` 改成 VLM 信心值（沒有分數時是 -1）；SAM 的分數只留在 `smoke_pipeline` 的輸出（`sam_score`）。
    - 所有新設定的預設值都維持現在的行為。
-3. 用第 4 節的評估集選出 `LA_SYSTEM_PROMPT`、`LA_PROMPT_TEMPLATE`、`VLM_MIN_SCORE`，寫進 `compose.yaml`。
+3. 用第 4 節的評估集選出 `LA_PROMPT_TEMPLATE`、`LA_SYSTEM_PROMPT`、`VLM_SCORE_FIELD`、`VLM_MIN_SCORE`，寫進 `compose.yaml`。
+
+### 評估結果
+
+評估集：`eval/cases.yaml`，21 張圖 × 4 個描述 = 84 題（32 題有目標、52 題沒有），用機器人上的 RealSense 拍攝（2026-09-20）。
+
+**分數**：`p_start` 一律約 1.0。模型找不到時也會先出 `<box>`，再接 `<none>`，所以 `p_start` 不能代表「有沒有東西」。`p_coord` 在 0.16～0.50 之間，分不出對錯。
+因此 patch 加了 **`p_object` = 1 − P(`<none>`)**，取框的第一個座標位置：這是模型在「框出來」和「說沒有」之間的取捨，也是唯一分得開對錯的分數。`VLM_SCORE_FIELD` 預設改為 `p_object`。
+
+**第 0 輪**（640 寬、`fast`，`p_object` 門檻；命中 = IoU ≥ 0.5）：
+
+| 設定 | 門檻 0：命中／誤抓 | 0.9 | 0.95 | 0.99 | p50 |
+|---|---|---|---|---|---|
+| `detect`（現在的 server） | 100% / 15.4% | 96.9% / 5.8% | 93.8% / 3.8% | 90.6% / 0% | 1951 ms |
+| `ground_multi` | 100% / 13.5% | 96.9% / 5.8% | 93.8% / 3.8% | 90.6% / 0% | 1956 ms |
+| `region` | 100% / 32.7% | 100% / 23.1% | 100% / 11.5% | 93.8% / 1.9% | 1998 ms |
+| `ground_single` | 100% / 98.1% | — | — | — | 2004 ms |
+| **`region` + `, exactly as described`** | 100% / 9.6% | **96.9% / 1.9%** | 93.8% / 0% | 59.4% / 0% | 2108 ms |
+| `detect` + `, exactly as described` | 84.4% / 1.9% | 59.4% / 0% | 50% / 0% | 25% / 0% | 2106 ms |
+
+- 誤抓幾乎都是**同類別換材質**（紙杯 ↔ 玻璃杯）。空桌面 20 題，除了 `ground_single`、`region` 以外都正確回 none。
+- `ground_single`（「找一個」）幾乎每題都硬給一個框，而且信心接近 1.0，**不能用**。
+- `detect` + `exactly` 雖然誤抓少，但會漏掉被切邊的黑色保溫瓶，紙杯也會框錯位置。
+- 分數偏低的正確答案，幾乎都是被畫面邊緣切到的黑色保溫瓶（0.85～0.93）。
+- 樣本小（誤抓只有個位數），而且只有一個場地，門檻邊界還不穩。定案前要用另一批圖驗證。
+
+**第 1 輪**（system prompt × 兩個基底，640 寬、`fast`）：
+
+| 設定 | 門檻 0 | 0.8 | 0.9 | 0.95 | 誤抓的最高分 | p50 |
+|---|---|---|---|---|---|---|
+| `detect` + 預設 system prompt | 100% / 15.4% | 100% / 15.4% | 96.9% / 5.8% | 93.8% / 3.8% | 0.981 | 1956 ms |
+| `detect` + 其他 3 種 system prompt | 100% / 13.5～15.4% | 同左 | 96.9% / 5.8～7.7% | 93.8% / 3.8% | 0.974～0.981 | 2020～2031 ms |
+| **`region`+`exactly` + 預設 system prompt** | 100% / 9.6% | 100% / 9.6% | **96.9% / 1.9%** | 93.8% / 0% | 0.932 | 2113 ms |
+| `region`+`exactly` + `sys-exact` | 96.9% / 3.8% | 96.9% / 1.9% | 93.8% / 0% | 87.5% / 0% | 0.874 | 2133 ms |
+| `region`+`exactly` + `sys-exact-none` | 96.9% / 5.8% | 96.9% / 3.8% | 87.5% / 0% | 84.4% / 0% | 0.835 | 2136 ms |
+| `region`+`exactly` + `sys-short` | 100% / 11.5% | 100% / 7.7% | 96.9% / 1.9% | 90.6% / 0% | 0.924 | 2123 ms |
+
+- 預設設定和第 0 輪的結果一模一樣：推論是確定性的，同樣的輸入每次輸出都相同。
+- **system prompt 影響很小**：各組之間只差 1～2 題，在 52 題的樣本裡分不出是不是雜訊。更嚴格的 system prompt 會讓 `p_object` 整體下降，對錯兩邊都降，還會多漏抓。
+- **暫定設定**：`region`+`exactly`、**預設 system prompt**、`VLM_MIN_SCORE=0.9`。system prompt 維持模型微調時用的那一句，可以避免讓模型偏離訓練時的條件。
+  部署時不需要改程式：`LA_PROMPT_TEMPLATE="Locate the region that matches the following description: {q}, exactly as described."`，產生的 prompt 和評估時一字不差。
+
+### 執行進度
+
+- [x] 階段 1：評估工具（見第 4 節）、模板設定
+- [x] 階段 3 程式：patch、Dockerfile、server 串接、單元測試（26 個通過）
+- [x] 使用者取圖：20 張，Pi 故障，改用本機接機器人的 RealSense 拍（848×480）
+- [x] 上機驗證 patch：3 種模式 × 5 張圖，框和原版完全一樣，耗時差 ±1% 以內，分數都在 0～1
+- [x] `--propose`（slow 模式）產生標註草稿 → 看 overlay，把錯的答案改成 none → `eval/cases.yaml`
+- [x] 第 0 輪（見上表）。Pi 沒在送圖，所以評估是另開容器跑，沒有停正式 server
+- [x] 第 1 輪（system prompt × `detect`／`region`+`exactly`）→ 暫定 `region`+`exactly`、預設 system prompt、`VLM_MIN_SCORE=0.9`（誤抓 15.4% → 1.9%，命中率 100% → 96.9%）
+- [x] 第 2 輪（解析度，見第 5 節）：維持 640 寬 + `fast`，降解析度會讓誤抓變成 3～4 倍
+- [ ] 用另一批圖（換場地、換物件）驗證選出的設定，確認不是只適用這組圖
+- [ ] 預設值寫進 `compose.yaml`，更新 vlm_transport.md 裡 `score` 的語意，交給使用者 commit 並部署
 
 ### 風險
 
@@ -208,9 +265,14 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
 
 ## 4. 現場評估集與評估腳本
 
-> 狀態：**待實作**。第 3 節（選 prompt 與門檻）和第 5 節（選解析度）都需要它。
+> 狀態（2026-09-20）：**完成**：84 題（`eval/cases.yaml`），第 0～2 輪都用它跑完。第 3 節（選 prompt 與門檻）和第 5 節（選解析度）都需要它。用法見 DEBUG.md §7。
 
-- `tools/grab_frame.sh`：透過 `ssh Hackathon-pi` + `docker exec`，用 rclpy 單次訂閱 `/camera/camera/color/image_rect_raw`，存到 `eval/images/`。
+- `tools/grab_frame.py`（**使用者在 Pi 上執行**，Claude 不碰 Pi）：用 rclpy 單次訂閱 `/camera/camera/color/image_rect_raw`，以原生解析度存成 PNG，再放到 `eval/images/`。
+- `scripts/eval_locate.py`：
+  - `--propose`：產生標註草稿。
+  - `--sweep eval/sweeps/roundN.yaml`：掃描各組設定。
+  - `--summarize results.csv`：不用模型，重算摘要。
+  - 縮圖方式模擬 client（先縮到指定寬度，再轉 JPEG q80）。
 - 請現場擺出四種場景，每種 3～5 張：
   1. 目標單獨出現（例如塑膠瓶）
   2. 目標 + 干擾物（塑膠瓶 + 金屬瓶）
@@ -227,7 +289,8 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
 
 ## 5. 解析度掃描
 
-> 狀態：**待實作**，和第 2 節（雲端）並行。
+> 狀態（2026-09-20）：**完成，結論是維持 640 寬**（見下方「結果」）。
+> 選擇原則：在命中率不低於 640 寬減 3 個百分點的組合中，選最快的一組。
 
 - 根據 locate-anything.cpp 的 README：量化只作用在語言模型，**視覺編碼器維持 f32**；MoonViT 是原生解析度輸入，影像 token 數和像素數成正比。
 - 這和實測吻合（`fast`，1～2 個目標）：
@@ -242,6 +305,23 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
 - 所以**降解析度是最直接的加速方法**；換成 q4 量化（只縮語言模型）幫助不大。
 - 用第 4 節的評估腳本掃 640／512／448／384。照趨勢外插，512 寬可能約 1.2 秒，但**還沒驗證**，小物件的框也可能變差。
 - 有效的話請 client 調 `vlm.upload_max_width`（client 已有這個參數，server 不用改），並更新 server_progress.md 第 5 節。
+
+### 結果（第 2 輪，2026-09-20）：**維持 640 寬，不調 `upload_max_width`**
+
+評估集同第 3 節（84 題）。設定為 `region`+`exactly`、預設 system prompt，`p_object` 門檻：
+
+| 上傳寬度 | 門檻 0：命中／誤抓 | 門檻 0.9：命中／誤抓 | 平均 IoU | p50（最大） |
+|---|---|---|---|---|
+| **640** | 100% / 9.6% | **96.9% / 1.9%** | 0.953 | 2051 ms（2633） |
+| 512 | 96.9% / 17.3% | 93.8% / 7.7% | 0.945 | 1553 ms（2050） |
+| 448 | 96.9% / 15.4% | 93.8% / 5.8% | 0.949 | 1336 ms（1546） |
+| 384 | 90.6% / 21.2% | 84.4% / 9.6% | 0.928 | 1176 ms（1326） |
+
+- 速度符合預期，和像素數成正比：448 寬快 35%。
+- 但**誤抓變成 3～4 倍**：分辨同類別、不同材質要靠細節，推測縮圖後這些細節不見了（還沒驗證）。
+- 照選擇原則（命中率不低於 640 寬減 3 個百分點），512／448 都差了 3.1 個百分點，而且和「不要亂抓」這個目標衝突。
+- `hybrid` 在每個寬度的結果都和 `fast` **完全一樣**，耗時也差不多（640 寬：2100 ms 對 2051 ms）。這批圖每張只有一個目標，`hybrid` 的 AR 補救沒有被觸發，所以**看不出兩者的差別**。維持 `fast`；同類物件很多時要用 `hybrid` 的建議（第 7 節）不變。
+- 想加速，走雲端 MI300X（第 2 節）比降解析度適合。
 
 ## 6. V3 舊程式整理
 

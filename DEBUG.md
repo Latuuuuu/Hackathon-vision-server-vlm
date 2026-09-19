@@ -24,7 +24,7 @@
 |---|---|---|
 | **server IP 是 DHCP 拿的**（`wlp98s0` 連 `DIT_ROBOTICS_5G`，`dynamic`） | IP 變了，client 全部逾時 | 在 router（`192.168.50.1`）幫 Hackathon-gpu 設 DHCP 保留 `192.168.50.125`。上機器人之前一定要做 |
 | **server 重啟後描述會消失**，`query_version` 從 0 重算 | 重啟後一律回 `NO_QUERY`，直到有人重新設定描述 | 聯測時用 `.env` 設 `VLM_INITIAL_QUERY`（見第 5 節），或重啟後馬上 `POST /api/query` |
-| **重啟後版本號可能撞號** | 重啟前是 v1「the dog」，重啟後設「the cup」又是 v1。如果 client 剛好沒看到中間的 v0，會誤以為描述沒變 | client 每 2 秒 ping 一次，只要重啟後等 2 秒以上再設描述，client 就會看到 1→0→1 的變化。根治要改 server（見第 7 節） |
+| **重啟後版本號可能撞號** | 重啟前是 v1「the dog」，重啟後設「the cup」又是 v1。如果 client 剛好沒看到中間的 v0，會誤以為描述沒變 | client 每 2 秒 ping 一次，只要重啟後等 2 秒以上再設描述，client 就會看到 1→0→1 的變化。根治要改 server（見第 8 節） |
 | **GPU 被其他工作占用** | 推論從 3.4 秒變慢，client 開始逾時 | 聯測期間不要在 Hackathon-gpu 上跑 benchmark 或 V3 tracker。之前兩組 benchmark 同時跑時，數字就互相干擾過 |
 | **其他服務占用 5555／8080** | server 起不來（port 衝突） | Hackathon-gpu 上原本的 V3 demo（`~/Documents/locate-sam2-d435i-v3`）也用 8080，不要同時啟動；啟動失敗時用 `ss -ltnp` 查是誰占用 |
 | **沒有認證** | 同網段任何人都能改描述或送圖 | 內網聯測可以接受；上公網前必須處理（見 [TODO.md](TODO.md) 第 2 節） |
@@ -272,7 +272,57 @@ docker compose up -d server
 | 4. 聯測時間 | server 已就緒，隨時可以。照第 3 節 L1 → L5 進行 |
 | 5. 上級描述 | 目前走 HTTP：`POST http://192.168.50.125:8080/api/query`（見 vlm_transport.md 第 4.5 節） |
 
-## 7. server 端已知問題（之後修）
+## 7. 評估：選 prompt、門檻、解析度（TODO.md §3～§5）
+
+### 7.1 取圖（Pi 端，由使用者執行）
+
+`tools/grab_frame.py` 是單一檔案，只需要 rclpy、numpy，以及 PIL 或 cv2 其中一個。複製到 Pi 上可以跑 ROS 2 的容器裡執行：
+
+```bash
+python3 grab_frame.py distract-1.png          # 預設 topic /camera/camera/color/image_rect_raw
+python3 grab_frame.py decoy-2.png --topic /camera/camera/color/image_raw
+```
+
+存下來的是原生解析度的 PNG。檔名開頭照場景分類：`single-`、`distract-`、`decoy-`、`empty-`（見 `eval/cases.yaml` 的說明），每種 3～5 張。圖片放到本機的 `eval/images/`。
+
+### 7.2 開發版 image（不動正式容器）
+
+```bash
+# 本機：把工作目錄同步到 dev 資料夾（不含 .venv、output）
+rsync -a --delete --exclude .venv --exclude output --exclude .git ./ Hackathon-gpu:~/Documents/vlm-server-dev/
+# Hackathon-gpu：build 開發版 image（torch 那幾層走快取，只重 build locate stage）
+cd ~/Documents/vlm-server-dev && docker build -t vlm-server:dev \
+  --build-arg TORCH_INDEX=https://stable.repo.amd.com/rocm/whl-next/ \
+  --build-arg 'TORCH_SPEC=torch[device-gfx1152]==2.13.0+rocm10.0.0' \
+  --build-arg 'TORCHVISION_SPEC=torchvision[device-gfx1152]==0.28.0+rocm10.0.0' .
+```
+
+### 7.3 跑評估（要先停掉正式 server，GPU 才不會被搶）
+
+```bash
+cd ~/Documents/vlm-server && docker compose stop server       # Pi 這段時間會收到逾時
+cd ~/Documents/vlm-server-dev
+EVAL="docker run --rm --device /dev/kfd --device /dev/dri \
+  -v $HOME/Documents/vlm:/models:ro -v $PWD/eval:/app/eval -v $PWD/output:/output \
+  -e LOCATE_MODEL=/models/locate-anything-q8_0.gguf -e LA_DEVICE=Vulkan0 vlm-server:dev"
+
+# 標註草稿：slow 模式的框 + 編號 overlay，確認後把條目抄進 eval/cases.yaml
+$EVAL python -m scripts.eval_locate --propose --query "the plastic bottle" --query "the paper cup" --out /output/eval/propose
+# 各輪掃描（round1/2 要先把上一輪最好的設定填進 sweep 檔）
+$EVAL python -m scripts.eval_locate --sweep /app/eval/sweeps/round0.yaml --overlay --out /output/eval/round0
+
+cd ~/Documents/vlm-server && docker compose up -d server      # 跑完一定要啟動回來
+```
+
+結果放在 `output/eval/<run>/`：
+- `results.csv`：每組設定 × 每個 case，包含所有框、`p_object`/`p_coord`/`p_start`、`locate_ms`。
+- `summary_p_object.csv`（主要看這個）、`summary_p_coord.csv`、`summary_p_start.csv`：各設定 × 門檻的命中率、誤抓率、`locate_ms` p50。
+
+要改門檻或指標時不用重跑推論，本機就能重算：`python -m scripts.eval_locate --summarize output/eval/round0/results.csv`。
+
+原版（沒有 patch）的 library 沒有分數，三個分數都是 -1，只能看門檻 0 那一列。要比較 patch 前後，就用 `--build-arg LA_PATCH=0` 另外 build 一個 tag。
+
+## 8. server 端已知問題（之後修）
 
 - [ ] **`query_version` 重啟後歸零，可能撞號**：改成從啟動時間戳開始編號，或把描述和版本存到檔案。
 - [ ] **描述不會保存**：重啟後遺失，目前靠 `VLM_INITIAL_QUERY` 暫時頂著。

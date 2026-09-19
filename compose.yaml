@@ -33,6 +33,11 @@ services:
       # Use hybrid when many same-class objects can be in frame (fast returned a
       # full-width box on a 15-dog image); clients then need timeout_s 12.0.
       LA_MODE: ${LA_MODE:-fast}
+      # Strict matching (TODO.md section 3); these defaults keep the original behaviour.
+      LA_PROMPT_TEMPLATE: ${LA_PROMPT_TEMPLATE:-detect}
+      LA_SYSTEM_PROMPT: ${LA_SYSTEM_PROMPT:-}
+      VLM_MIN_SCORE: ${VLM_MIN_SCORE:-0}
+      VLM_SCORE_FIELD: ${VLM_SCORE_FIELD:-p_object}
       CPU_THREADS: "6"
       SAM_DEVICE: cuda
       EXPECTED_GPU_ARCH: gfx1152

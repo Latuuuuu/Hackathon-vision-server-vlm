@@ -11,11 +11,12 @@ import numpy as np
 import zmq
 from PIL import Image
 
+from scripts import eval_locate as E
 from vlm_server import protocol as P
 from vlm_server.gpu_check import check_gpu
 from vlm_server.http_api import create_app
-from vlm_server.locator import valid_box
-from vlm_server.pipeline import Detection, TargetFinder, encode_mask_crop, to_pixel_box
+from vlm_server.locator import format_prompt, valid_box
+from vlm_server.pipeline import Detection, TargetFinder, encode_mask_crop, rank_candidates, to_pixel_box
 from vlm_server.query import QueryStore
 from vlm_server.zmq_server import Stats, Worker, ZmqServer
 
@@ -114,6 +115,68 @@ class Geometry(unittest.TestCase):
         crop = np.asarray(Image.open(io.BytesIO(png)))
         self.assertEqual(crop.shape, (10, 10))
         self.assertTrue((crop == 255).all())
+
+
+class Prompt(unittest.TestCase):
+    def test_default_is_the_original_prompt(self):
+        with patch.dict('os.environ', {}, clear=True):
+            self.assertEqual(format_prompt('the cup'),
+                             'Locate all the instances that matches the following description: the cup.')
+
+    def test_named_and_custom_templates(self):
+        self.assertEqual(format_prompt('the cup', 'ground_single'),
+                         'Locate a single instance that matches the following description: the cup.')
+        self.assertEqual(format_prompt('the cup', 'Find {q} only.'), 'Find the cup only.')
+        with patch.dict('os.environ', {'LA_PROMPT_TEMPLATE': 'region'}):
+            self.assertTrue(format_prompt('the cup').startswith('Locate the region'))
+        with self.assertRaises(ValueError):
+            format_prompt('the cup', 'nonsense')
+
+
+class Ranking(unittest.TestCase):
+    boxes = [[0, 0, 1, 1], [1, 1, 2, 2], [2, 2, 3, 3]]
+
+    def test_unscored_keeps_locate_order(self):
+        scores = [dict(p_start=-1, p_coord=-1, p_object=-1)] * 3
+        self.assertEqual([b for b, _ in rank_candidates(self.boxes, scores)], self.boxes)
+
+    def test_highest_score_first_and_threshold(self):
+        scores = [dict(p_object=0.4, p_coord=0.9), dict(p_object=0.95, p_coord=0.5), dict(p_object=0.8, p_coord=0.99)]
+        self.assertEqual(rank_candidates(self.boxes, scores)[0], (self.boxes[1], 0.95))
+        self.assertEqual([s for _, s in rank_candidates(self.boxes, scores, 0.7)], [0.95, 0.8])
+        self.assertEqual(rank_candidates(self.boxes, scores, 0.97), [])
+        self.assertEqual(rank_candidates(self.boxes, scores, 0, 'p_coord')[0][0], self.boxes[2])
+
+
+class Evaluation(unittest.TestCase):
+    def test_iou(self):
+        self.assertAlmostEqual(E.iou([0, 0, 10, 10], [0, 0, 10, 10]), 1.0)
+        self.assertAlmostEqual(E.iou([0, 0, 10, 10], [5, 0, 15, 10]), 50 / 150)
+        self.assertEqual(E.iou([0, 0, 1, 1], [2, 2, 3, 3]), 0.0)
+
+    def test_judge(self):
+        target, decoy = [0, 0, 10, 10], [50, 50, 60, 60]
+        self.assertEqual(E.judge(None, [], []), 'reject')
+        self.assertEqual(E.judge(None, [decoy], [0.6]), 'false_positive')
+        self.assertEqual(E.judge(None, [decoy], [0.6], threshold=0.7), 'reject')
+        self.assertEqual(E.judge(target, [decoy, target], [0.5, 0.9]), 'hit')
+        self.assertEqual(E.judge(target, [decoy, target], [0.9, 0.5]), 'wrong_box')
+        self.assertEqual(E.judge(target, [target], [0.5], threshold=0.7), 'miss')
+        self.assertEqual(E.judge(target, [target, decoy], [-1, -1]), 'hit')  # unscored: first box
+
+    def test_summarize(self):
+        s = lambda v: dict(p_object=v, p_coord=v, p_start=1.0)
+        rows = [dict(config='a', expected=[0, 0, 10, 10], boxes=[[0, 0, 10, 10]], scores=[s(0.9)], locate_ms=100),
+                dict(config='a', expected=None, boxes=[[5, 5, 9, 9]], scores=[s(0.4)], locate_ms=300)]
+        by_threshold = {row['threshold']: row for row in E.summarize(rows, thresholds=[0.0, 0.5])}
+        self.assertEqual((by_threshold[0.0]['hit_rate'], by_threshold[0.0]['false_positive_rate']), (1.0, 1.0))
+        self.assertEqual((by_threshold[0.5]['hit_rate'], by_threshold[0.5]['false_positive_rate']), (1.0, 0.0))
+        self.assertEqual(by_threshold[0.0]['locate_ms_p50'], 200)
+
+    def test_upload_jpeg_scales_like_client(self):
+        data, scale = E.upload_jpeg(Image.new('RGB', (1280, 720)), 640)
+        self.assertEqual((Image.open(io.BytesIO(data)).size, scale), ((640, 360), 0.5))
+        self.assertEqual(E.upload_jpeg(Image.new('RGB', (598, 472)), 640)[1], 1.0)
 
 
 class GpuCheck(unittest.TestCase):
