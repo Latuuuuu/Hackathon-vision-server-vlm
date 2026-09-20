@@ -1,6 +1,6 @@
 """Minimal DEALER client for manual checks and latency numbers.
 
-python -m tools.test_client --endpoint tcp://192.168.50.125:5555 --ping 5
+python -m tools.test_client --endpoint tcp://192.168.68.51:5555 --ping 5
 python -m tools.test_client --image test.jpg --count 5 --out overlay.jpg
 """
 import argparse

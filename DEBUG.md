@@ -1,8 +1,9 @@
 # DEBUG：VLM server 部署與聯測
 
-> 更新：2026-09-19。對應協定：[vlm_transport.md](vlm_transport.md)（protocol_version 1）；client 進度：[client_progress.md](client_progress.md)。
+> 更新：2026-09-20。**server 換 IP：`192.168.68.51`**（原本是 `192.168.50.125`），ssh alias 改成 `Hackathon-local-server`；下面 2026-09-19 的量測紀錄是在舊 IP 上做的。
+> 原更新：2026-09-19。對應協定：[vlm_transport.md](vlm_transport.md)（protocol_version 1）；client 進度：[client_progress.md](client_progress.md)。
 
-## 結論：可以聯測，server 已經在 Hackathon-gpu 上跑
+## 結論：可以聯測，server 已經在 Hackathon-local-server 上跑
 
 2026-09-19 實際查核的狀態：
 
@@ -14,7 +15,7 @@
 | 模型 | 就緒，`LA_MODE=fast`，只回 bbox | `/api/status`：`model_ready: true` |
 | Pi → server 連線 | 通 | Pi（`192.168.50.67`，wlan0）連得到 `tcp 5555`，`GET /api/query` 正常 |
 | Pi → server ZMQ ping | p50 **9.0 ms**、p90 12.6 ms、max 111.7 ms（30 次） | 從 Pi 的 `hackathon-vision-client-ws` 容器內量測 |
-| Pi 的 bridge | 已接真 server（L3 通過，見第 3 節） | `vlm_bridge.launch.py vlm.endpoint:=tcp://192.168.50.125:5555`，mock 已關閉 |
+| Pi 的 bridge | 已接真 server（L3 通過，見第 3 節） | `vlm_bridge.launch.py vlm.endpoint:=tcp://192.168.68.51:5555`，mock 已關閉 |
 
 也就是說，**server 端不需要再部署**。剩下的是把 Pi bridge 的 endpoint 換成真的 server，然後照第 3 節一層一層驗證。
 
@@ -22,16 +23,16 @@
 
 | 風險 | 影響 | 處理方式 |
 |---|---|---|
-| **server IP 是 DHCP 拿的**（`wlp98s0` 連 `DIT_ROBOTICS_5G`，`dynamic`） | IP 變了，client 全部逾時 | 在 router（`192.168.50.1`）幫 Hackathon-gpu 設 DHCP 保留 `192.168.50.125`。上機器人之前一定要做 |
+| **server IP**：2026-09-20 起改成 `192.168.68.51`（原本是 `192.168.50.125`），預計固定 | IP 變了，client 全部逾時 | 確認 router 已經幫 Hackathon-local-server 設好 DHCP 保留。Pi 的 `vlm.endpoint` 要改成新 IP |
 | **server 重啟後描述會消失**，`query_version` 從 0 重算 | 重啟後一律回 `NO_QUERY`，直到有人重新設定描述 | 聯測時用 `.env` 設 `VLM_INITIAL_QUERY`（見第 5 節），或重啟後馬上 `POST /api/query` |
 | **重啟後版本號可能撞號** | 重啟前是 v1「the dog」，重啟後設「the cup」又是 v1。如果 client 剛好沒看到中間的 v0，會誤以為描述沒變 | client 每 2 秒 ping 一次，只要重啟後等 2 秒以上再設描述，client 就會看到 1→0→1 的變化。根治要改 server（見第 8 節） |
-| **GPU 被其他工作占用** | 推論從 3.4 秒變慢，client 開始逾時 | 聯測期間不要在 Hackathon-gpu 上跑 benchmark 或 V3 tracker。之前兩組 benchmark 同時跑時，數字就互相干擾過 |
-| **其他服務占用 5555／8080** | server 起不來（port 衝突） | Hackathon-gpu 上原本的 V3 demo（`~/Documents/locate-sam2-d435i-v3`）也用 8080，不要同時啟動；啟動失敗時用 `ss -ltnp` 查是誰占用 |
+| **GPU 被其他工作占用** | 推論從 3.4 秒變慢，client 開始逾時 | 聯測期間不要在 Hackathon-local-server 上跑 benchmark 或 V3 tracker。之前兩組 benchmark 同時跑時，數字就互相干擾過 |
+| **其他服務占用 5555／8080** | server 起不來（port 衝突） | Hackathon-local-server 上原本的 V3 demo（`~/Documents/locate-sam2-d435i-v3`）也用 8080，不要同時啟動；啟動失敗時用 `ss -ltnp` 查是誰占用 |
 | **沒有認證** | 同網段任何人都能改描述或送圖 | 內網聯測可以接受；上公網前必須處理（見 [TODO.md](TODO.md) 第 2 節） |
 
 ## 2. 部署與更新流程（server 端）
 
-Hackathon-gpu 的 `~/Documents/vlm-server` 是這個 repo 的 git 工作目錄（從 GitHub clone），部署一律走 git，**不要再用 rsync 直接改那邊的檔案**
+Hackathon-local-server 的 `~/Documents/vlm-server` 是這個 repo 的 git 工作目錄（從 GitHub clone），部署一律走 git，**不要再用 rsync 直接改那邊的檔案**
 （`deploy.sh` 發現有被追蹤的檔案被改過就會中止）。
 
 ```bash
@@ -39,13 +40,13 @@ Hackathon-gpu 的 `~/Documents/vlm-server` 是這個 repo 的 git 工作目錄�
 git push
 
 # 部署 origin/main（build → 容器內單元測試 → 重啟 → 等 model_ready → 記錄到 output/DEPLOYED）
-ssh Hackathon-gpu '~/Documents/vlm-server/deploy/deploy.sh'
+ssh Hackathon-local-server '~/Documents/vlm-server/deploy/deploy.sh'
 
 # 回滾到指定 commit
-ssh Hackathon-gpu '~/Documents/vlm-server/deploy/deploy.sh <commit>'
+ssh Hackathon-local-server '~/Documents/vlm-server/deploy/deploy.sh <commit>'
 
 # 目前部署的是哪個 commit
-ssh Hackathon-gpu 'cat ~/Documents/vlm-server/output/DEPLOYED'
+ssh Hackathon-local-server 'cat ~/Documents/vlm-server/output/DEPLOYED'
 ```
 
 build 或測試失敗時 `deploy.sh` 會中止，**不會重啟**，server 繼續跑舊版本。
@@ -61,7 +62,7 @@ build 或測試失敗時 `deploy.sh` 會中止，**不會重啟**，server 繼�
 ### L0：server 自己健康
 
 ```bash
-ssh Hackathon-gpu 'curl -s localhost:8080/api/status'
+ssh Hackathon-local-server 'curl -s localhost:8080/api/status'
 ```
 
 通過條件：`model_ready: true`、`model_error: null`、`model_info.la_mode` 是預期的模式。
@@ -82,7 +83,7 @@ ssh Hackathon-gpu 'curl -s localhost:8080/api/status'
 ssh Hackathon-pi 'docker exec -i hackathon-vision-client-ws python3 -' <<'EOF'
 import json, time, statistics, zmq
 s = zmq.Context().socket(zmq.DEALER); s.setsockopt(zmq.LINGER, 0)
-s.connect('tcp://192.168.50.125:5555'); time.sleep(0.3)
+s.connect('tcp://192.168.68.51:5555'); time.sleep(0.3)
 rtts = []
 for i in range(30):
     t = time.monotonic()
@@ -117,8 +118,8 @@ EOF
 從本機用 test client 送一張圖，確認框出來的東西是對的：
 
 ```bash
-curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/json' -d '{"text":"the red cup"}'
-.venv/bin/python -m tools.test_client --endpoint tcp://192.168.50.125:5555 \
+curl -X POST http://192.168.68.51:8080/api/query -H 'Content-Type: application/json' -d '{"text":"the red cup"}'
+.venv/bin/python -m tools.test_client --endpoint tcp://192.168.68.51:5555 \
   --image <現場拍的照片>.jpg --count 3 --timeout 20 --out overlay.jpg
 ```
 
@@ -145,12 +146,12 @@ curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/
 1. 在 Pi 上停掉 mock server（`mock_vlm_server.py`）和目前的 bridge。
 2. 用真的 endpoint 重新啟動 bridge（沿用 client 現在的啟動方式，只換參數）：
    ```bash
-   ros2 launch object_tracker vlm_bridge.launch.py vlm.endpoint:=tcp://192.168.50.125:5555
+   ros2 launch object_tracker vlm_bridge.launch.py vlm.endpoint:=tcp://192.168.68.51:5555
    ```
 3. 在 server 端設定描述，並看請求有沒有進來：
    ```bash
-   curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/json' -d '{"text":"<目標描述>"}'
-   watch -n 2 "curl -s http://192.168.50.125:8080/api/status | python3 -m json.tool | tail -30"
+   curl -X POST http://192.168.68.51:8080/api/query -H 'Content-Type: application/json' -d '{"text":"<目標描述>"}'
+   watch -n 2 "curl -s http://192.168.68.51:8080/api/status | python3 -m json.tool | tail -30"
    ```
 
 通過條件：
@@ -182,9 +183,9 @@ curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/
 
 | 情境 | 怎麼做 | 預期 |
 |---|---|---|
-| 沒有描述 | `curl -X DELETE http://192.168.50.125:8080/api/query` | client 收到 `NO_QUERY`，退避 5 秒再送 |
+| 沒有描述 | `curl -X DELETE http://192.168.68.51:8080/api/query` | client 收到 `NO_QUERY`，退避 5 秒再送 |
 | 換描述 | `POST /api/query` 換一個文字 | `query_version` +1，client 馬上送圖，新 bbox 回來後替換 target |
-| server 重啟 | `ssh Hackathon-gpu 'docker restart vlm-server'` | 模型載入期間 client 收到 `ERROR`（`model loading`）；之後因為描述消失而收到 `NO_QUERY`，**要重設描述** |
+| server 重啟 | `ssh Hackathon-local-server 'docker restart vlm-server'` | 模型載入期間 client 收到 `ERROR`（`model loading`）；之後因為描述消失而收到 `NO_QUERY`，**要重設描述** |
 | 目標不在畫面 | 把目標物拿走 | `NOT_FOUND`，tracker 繼續追舊 target |
 | 斷網 | 暫時關掉 server 的 WiFi，或 `docker stop` | client 逾時（6 秒）、ZMQ 自動重連；恢復後不用重啟 bridge 就能繼續 |
 
@@ -210,9 +211,9 @@ L4 實際觀察（從 bridge log 推斷當時做了這些測試，時間為 UTC�
 
 | 症狀 | 可能原因 | 查法 / 處理 |
 |---|---|---|
-| client 全部逾時，ping 也逾時 | IP 變了、server 沒開、網路不通 | L1；`ssh Hackathon-gpu 'ip -4 addr show wlp98s0; docker ps'` |
+| client 全部逾時，ping 也逾時 | IP 變了、server 沒開、網路不通 | L1；`ssh Hackathon-local-server 'ip -4 addr show wlp98s0; docker ps'` |
 | ping 正常，detect 全部逾時 | 推論比 `timeout_s` 慢 | server `/api/status` 的 `server_ms`；檢查 `la_mode` 是不是被改成 `slow`；檢查 GPU 有沒有被占用（見第 5 節） |
-| 一直收到 `NO_QUERY` | 沒設描述，或 server 重啟後描述消失 | `curl http://192.168.50.125:8080/api/query`，`text` 是 `null` 就重設 |
+| 一直收到 `NO_QUERY` | 沒設描述，或 server 重啟後描述消失 | `curl http://192.168.68.51:8080/api/query`，`text` 是 `null` 就重設 |
 | 一直收到 `ERROR: model loading` | 模型還在載入，或載入失敗 | `/api/status` 的 `model_error`；`docker logs --tail 100 vlm-server` |
 | `ERROR: image larger than 1280px` | client 沒縮圖 | client 的 `vlm.upload_max_width` 要是 640 |
 | `server_ms` 忽高忽低，大約是兩倍，但 `/api/status` 的 `locate_ms` 很穩定 | 有其他 client 同時在送圖，請求在排隊 | 看 `recent` 裡有沒有交錯的 request_id；聯測時關掉筆電上的 `test_client` |
@@ -224,7 +225,7 @@ L4 實際觀察（從 bridge log 推斷當時做了這些測試，時間為 UTC�
 | 換了描述，client 沒反應 | 重啟後版本號撞號（第 1 節） | 看 client 記錄的 `query_version`；先 `DELETE` 再 `POST`，強迫版本號變兩次 |
 | 主機重開機後 server 沒起來 | docker 沒啟動，或容器啟動失敗 | `systemctl status docker`；`docker ps -a`；`docker logs vlm-server` |
 
-## 5. 常用指令（在 Hackathon-gpu 上）
+## 5. 常用指令（在 Hackathon-local-server 上）
 
 ```bash
 cd ~/Documents/vlm-server
@@ -266,11 +267,11 @@ docker compose up -d server
 
 | client 的問題 | 回覆 |
 |---|---|
-| 1. 正式 IP | 目前 `192.168.50.125`，但是 **DHCP 拿的，會變**。要在 router 設 DHCP 保留，上機器人前一定要處理 |
+| 1. 正式 IP | **`192.168.68.51`**（2026-09-20 起，預計固定；原本是 `192.168.50.125`）。要確認 router 已設 DHCP 保留 |
 | 2. `LA_MODE` | 預設 `fast`，`timeout_s = 6.0` 正確。只有場上可能出現大量同類物件時才會改 `hybrid`，改的時候會通知，client 要改 `12.0` |
 | 3. bbox 的鬆緊 | 單、雙目標實測時 `fast` 的框貼著物件，和 `slow` 只差幾個 px（見 vlm_transport.md 第 8 節）。**樣本只有狗的照片，現場物件還沒測**，L2 用現場照片確認。偏大的話就開 mask |
 | 4. 聯測時間 | server 已就緒，隨時可以。照第 3 節 L1 → L5 進行 |
-| 5. 上級描述 | 目前走 HTTP：`POST http://192.168.50.125:8080/api/query`（見 vlm_transport.md 第 4.5 節） |
+| 5. 上級描述 | 目前走 HTTP：`POST http://192.168.68.51:8080/api/query`（見 vlm_transport.md 第 4.5 節） |
 
 ## 7. 評估：選 prompt、門檻、解析度（TODO.md §3～§5）
 
@@ -289,8 +290,8 @@ python3 grab_frame.py decoy-2.png --topic /camera/camera/color/image_raw
 
 ```bash
 # 本機：把工作目錄同步到 dev 資料夾（不含 .venv、output）
-rsync -a --delete --exclude .venv --exclude output --exclude .git ./ Hackathon-gpu:~/Documents/vlm-server-dev/
-# Hackathon-gpu：build 開發版 image（torch 那幾層走快取，只重 build locate stage）
+rsync -a --delete --exclude .venv --exclude output --exclude .git ./ Hackathon-local-server:~/Documents/vlm-server-dev/
+# Hackathon-local-server：build 開發版 image（torch 那幾層走快取，只重 build locate stage）
 cd ~/Documents/vlm-server-dev && docker build -t vlm-server:dev \
   --build-arg TORCH_INDEX=https://stable.repo.amd.com/rocm/whl-next/ \
   --build-arg 'TORCH_SPEC=torch[device-gfx1152]==2.13.0+rocm10.0.0' \

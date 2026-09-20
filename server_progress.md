@@ -5,7 +5,7 @@
 
 ## 摘要
 
-- **server 已部署在 Hackathon-gpu，和 Pi 5 聯測通過**：約 40 分鐘、296 筆有推論的 detect，290 筆 `FOUND`，只逾時 1 次（server 手動重啟造成）。
+- **server 已部署在 Hackathon-local-server，和 Pi 5 聯測通過**：約 40 分鐘、296 筆有推論的 detect，290 筆 `FOUND`，只逾時 1 次（server 手動重啟造成）。
 - **設定**：`LA_MODE=fast`、只回 bbox（不跑 SAM2）、GPU 是 **AMD Radeon 860M**（內顯）。
 - **推論 1.9 秒是穩定值**，前提是解析度和場景不變：296 筆的 `server_ms` p50 1883 ms、p99 1894 ms、最大 1914 ms。第 3 節說明什麼情況會變。
 - **建議 client 改成連續送圖**（`refresh_period_s = 0.0`），`timeout_s` 改 5.0、`no_query_backoff_s` 改 1.0，見第 5 節。
@@ -15,11 +15,11 @@
 
 | # | client 的問題 | 回覆 |
 |---|---|---|
-| 1 | 正式 IP | 目前 `192.168.50.125`，但**是 DHCP 拿的**（Hackathon-gpu 連 `DIT_ROBOTICS_5G`），有可能會變。要在 router（`192.168.50.1`）設 DHCP 保留，上機器人前一定要處理 |
+| 1 | 正式 IP | **`192.168.68.51`**（2026-09-20 起，預計固定；原本是 `192.168.50.125`）。**client 的 `vlm.endpoint` 要改成新 IP**。要確認 router 已設 DHCP 保留 |
 | 2 | `LA_MODE` | **`fast`**，之後也維持 `fast`。只有場上可能出現大量同類物件時才會考慮 `hybrid`（第 3 節），改之前會先通知，屆時 client 的 `timeout_s` 要改成 12.0 |
 | 3 | bbox 的鬆緊 | 目前觀察是**貼的**。實驗室照片測紙杯、水瓶，框都緊貼物件（DEBUG.md L2）；聯測時 tracker debug 畫面的範圍也落在紙杯上。樣本還不多，遇到偏大的情況再評估開 mask |
 | 4 | 這次聯測的 server 設定 | 見第 2、3 節：`LA_MODE=fast`、Radeon 860M、1.9 秒在固定解析度下是穩定值 |
-| 5 | 上級描述走 HTTP 還是 ROS 2 | 目前走 **HTTP**：`POST http://192.168.50.125:8080/api/query`，body `{"text": "..."}`（vlm_transport.md 第 4.5 節）。之後改成 ROS 2 也只換這一層，ZMQ 協定不變 |
+| 5 | 上級描述走 HTTP 還是 ROS 2 | 目前走 **HTTP**：`POST http://192.168.68.51:8080/api/query`，body `{"text": "..."}`（vlm_transport.md 第 4.5 節）。之後改成 ROS 2 也只換這一層，ZMQ 協定不變 |
 
 另外，client_progress.md 第 4 節提到 4 筆 bbox 都是 `[235, 323, 326, 432]`，懷疑畫面是靜止的：
 **同一張圖、同一個描述，VLM 每次輸出的框完全一樣**（L2 實測三次一致）。所以 4 筆完全相同，代表畫面幾乎沒變，這個推論是對的。
@@ -28,7 +28,7 @@
 
 | 項目 | 值 |
 |---|---|
-| 主機 | Hackathon-gpu（`192.168.50.125`，WiFi `DIT_ROBOTICS_5G`，DHCP） |
+| 主機 | Hackathon-local-server（`192.168.68.51`，2026-09-20 起，預計固定） |
 | CPU / GPU | AMD Ryzen AI 7 350，內顯 **AMD Radeon 860M**（RDNA 3.5，`gfx1152`） |
 | 記憶體 | 30 GiB，CPU 與 GPU 共用 |
 | VLM | NVIDIA **LocateAnything-3B**（Qwen2.5-3B + MoonViT），gguf `q8_0`，5.83 GiB |
@@ -99,7 +99,7 @@ L3（2026-09-19 09:49～10:30 UTC，Pi 5 走 WiFi，從 bridge log 統計）：
 
 ```yaml
 vlm.enable: true
-vlm.endpoint: "tcp://192.168.50.125:5555"
+vlm.endpoint: "tcp://192.168.68.51:5555"
 vlm.timeout_s: 5.0
 vlm.refresh_period_s: 0.0
 vlm.upload_max_width: 640
@@ -194,7 +194,7 @@ bbox 回來時描述的是約 2 秒前（約 60 幀前）的畫面。這段時�
 
 | 問題 | 影響 | 暫時的處理 |
 |---|---|---|
-| server IP 是 DHCP | IP 變了 client 全部逾時 | router 設 DHCP 保留（待處理） |
+| server IP 換過一次（2026-09-20 改成 `192.168.68.51`） | IP 變了 client 全部逾時 | 確認 router 已設 DHCP 保留 |
 | 重啟後描述消失、`query_version` 從 0 重算 | 重啟後一律 `NO_QUERY`；版本號可能和重啟前撞號，client 可能沒發現描述換了 | 重啟後等 2 秒以上再設描述，client 會看到 1→0→1；或設定 `VLM_INITIAL_QUERY`。之後要改 server |
 | 同時只能跑一筆推論 | 多個 client 同時送會排隊 | 聯測時只讓 Pi 送圖 |
 | `fast` 模式遇到大量同類物件會壞 | 回傳橫跨整張圖的框 | 場上有這種情況再改 `hybrid` |

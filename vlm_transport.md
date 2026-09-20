@@ -1,6 +1,6 @@
 # VLM Target 傳輸介面
 
-> 狀態：**server 與 client 都已實作，2026-09-19 在 Pi 5 ↔ Hackathon-gpu 聯測通過**（約 40 分鐘，296 筆 detect，290 筆 `FOUND`）。
+> 狀態：**server 與 client 都已實作，2026-09-19 在 Pi 5 ↔ Hackathon-local-server 聯測通過**（約 40 分鐘，296 筆 detect，290 筆 `FOUND`）。
 > 第 7 節的參數已依實測更新。進度細節：[server_progress.md](server_progress.md)、[client_progress.md](client_progress.md)；聯測與除錯：[DEBUG.md](DEBUG.md)。
 
 ## 1. 流程總覽
@@ -84,8 +84,8 @@ DEALER 送出時**不加**空的分隔 frame（這點和 REQ 不同）。
 |---|---|---|
 | Port | `5555/tcp` | client 參數 `vlm.endpoint` 可以改；server 端 `VLM_ZMQ_BIND` |
 | 描述 API port | `8080/tcp` | HTTP，見 4.5；server 端 `VLM_HTTP_PORT` |
-| Server IP | Hackathon-gpu `192.168.50.125` | **目前是 DHCP 拿的**（WiFi `DIT_ROBOTICS_5G`），可能會變。上機器人前要在 router（`192.168.50.1`）設 DHCP 保留 |
-| 防火牆 | server 要開放 `5555/tcp`、`8080/tcp` 入站 | Hackathon-gpu 目前不需要另外設定，Pi 已可連線 |
+| Server IP | Hackathon-local-server `192.168.68.51` | 2026-09-20 起，預計固定（原本是 `192.168.50.125`）。要確認 router 已設 DHCP 保留 |
+| 防火牆 | server 要開放 `5555/tcp`、`8080/tcp` 入站 | Hackathon-local-server 目前不需要另外設定，Pi 已可連線 |
 | Docker | client container 已經是 `network_mode: host`，不需要另外映射 port | server 若跑在 container 裡要映射或用 host 網路 |
 | ROS_DOMAIN_ID | 不受影響 | 這條連線不走 DDS |
 
@@ -195,7 +195,7 @@ server 不需要知道相機的原始解析度。
 | `GET` | `/api/status` | — | 模型狀態、最近 50 筆的 `locate_ms` / `sam_ms` / `server_ms`、被丟棄的舊請求數、`target`（同 4.6） |
 
 ```bash
-curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/json' -d '{"text":"the red cup"}'
+curl -X POST http://192.168.68.51:8080/api/query -H 'Content-Type: application/json' -d '{"text":"the red cup"}'
 ```
 
 `query_version` 在 server 重啟後會從 0 重新開始。
@@ -205,7 +205,7 @@ curl -X POST http://192.168.50.125:8080/api/query -H 'Content-Type: application/
 BT engine 用 `GET /api/target` 詢問：目前這個描述，VLM 有沒有找到過。
 
 ```bash
-curl http://192.168.50.125:8080/api/target
+curl http://192.168.68.51:8080/api/target
 ```
 
 ```json
@@ -267,7 +267,7 @@ client 的實作（`vlm_bridge_node`）：同時只有一筆在路上；第 3 �
 | 參數 | 建議值 | 說明 |
 |---|---|---|
 | `vlm.enable` | `true` | 關閉時沿用 `target_image_path` 的靜態 target |
-| `vlm.endpoint` | `tcp://192.168.50.125:5555` | Hackathon-gpu。IP 目前是 DHCP，見第 3 節 |
+| `vlm.endpoint` | `tcp://192.168.68.51:5555` | Hackathon-local-server（2026-09-20 起的新 IP），見第 3 節 |
 | `vlm.timeout_s` | `5.0` | 實測 rtt 最大 2.83 s。原則是**大於「最慢推論 + 最慢網路」**，否則逾時重送會排在 server 還沒跑完的那筆後面，接著連續逾時。`slow`／`hybrid` 要改成 `12.0` |
 | `vlm.refresh_period_s` | `0.0` | 回來一筆馬上送下一筆（第 6 節）。要省 GPU 時才調大 |
 | `vlm.upload_max_width` | `640` | 推論時間大致和像素數成正比（第 8.2 節），改了之後要重新量 |
@@ -292,7 +292,7 @@ handoff_ms  = 建 target + 在目前這一幀驗證的時間
 
 ### server 環境
 
-Hackathon-gpu：AMD Ryzen AI 7 350，內顯 **AMD Radeon 860M**（RDNA 3.5，`gfx1152`，與 CPU 共用 30 GiB 記憶體）。
+Hackathon-local-server：AMD Ryzen AI 7 350，內顯 **AMD Radeon 860M**（RDNA 3.5，`gfx1152`，與 CPU 共用 30 GiB 記憶體）。
 VLM 是 LocateAnything-3B（gguf `q8_0`），locate-anything.cpp 走 **Vulkan**。預設 `LA_MODE=fast`、只回 bbox（不跑 SAM2）。
 
 ### 8.1 Pi 5 ↔ server 聯測（2026-09-19，主要依據）

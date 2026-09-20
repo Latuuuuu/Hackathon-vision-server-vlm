@@ -2,7 +2,7 @@
 
 1. [Client 交接策略：現有作法 vs 預追蹤](#1-client-交接策略現有作法-vs-預追蹤)（現有作法已上線，B 待數據決定）
 2. [把 VLM 搬到雲端 AMD MI300X](#2-把-vlm-搬到雲端-amd-mi300x)（2026-09-19 重啟，和第 5 節並行）
-3. [嚴格匹配、不硬找](#3-嚴格匹配不硬找)（第 0、1 輪完成，暫定設定，待另一批圖驗證）
+3. [嚴格匹配、不硬找](#3-嚴格匹配不硬找)（已部署並在 `.env` 啟用；驗證集待跑）
 4. [現場評估集與評估腳本](#4-現場評估集與評估腳本)（完成：84 題）
 5. [解析度掃描](#5-解析度掃描)（完成：維持 640 寬）
 6. [V3 舊程式整理](#6-v3-舊程式整理)（完成，2026-09-19）
@@ -146,7 +146,7 @@ client 換 server 只是改 `vlm.endpoint`。
 
 ## 3. 嚴格匹配、不硬找
 
-> 狀態（2026-09-20）：**patch 已在 GPU 上驗證，第 0、1 輪完成，暫定設定待另一批圖驗證**。結果見「評估結果」，進度見「執行進度」。
+> 狀態（2026-09-20）：**程式已部署（`5dc8d7d`），設定也已在正式機的 `.env` 啟用；驗證集還沒跑**。結果見「評估結果」，進度見「執行進度」。
 
 ### 問題
 
@@ -186,7 +186,7 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
      - `p_coord`：4 個座標 token 機率的平均。
      - MTP 取該 block 位置的 softmax，AR 取該步的 softmax。
    - 原本規劃的 `LA_START_THRESH` **拿掉**：0.7 不是接受框的門檻（見上表更正），改由 server 端用 `VLM_MIN_SCORE` 過濾分數，效果一樣，而且調門檻不用重 build。
-   - 本機 CPU build 通過；patch 可以乾淨套用到 v0.1.0。**還沒在 Hackathon-gpu 上用實際模型驗證。**
+   - 本機 CPU build 通過；patch 可以乾淨套用到 v0.1.0。**還沒在 Hackathon-local-server 上用實際模型驗證。**
 2. **server 端**（`vlm_server/locator.py`、`vlm_server/pipeline.py`）：
    - `LA_PROMPT_TEMPLATE`：上表的名稱，或含 `{q}` 的自訂字串；預設 `detect`。
    - `VLM_SCORE_FIELD`（`p_object`／`p_coord`／`p_start`，預設 `p_object`）、`VLM_MIN_SCORE`（預設 0，不過濾）。所有框都低於門檻就回 `NOT_FOUND`；有多個框時取分數最高的。原版 library 沒有分數，會照 Locate 的順序取第一個，和以前一樣。
@@ -245,7 +245,31 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
 - [x] 第 0 輪（見上表）。Pi 沒在送圖，所以評估是另開容器跑，沒有停正式 server
 - [x] 第 1 輪（system prompt × `detect`／`region`+`exactly`）→ 暫定 `region`+`exactly`、預設 system prompt、`VLM_MIN_SCORE=0.9`（誤抓 15.4% → 1.9%，命中率 100% → 96.9%）
 - [x] 第 2 輪（解析度，見第 5 節）：維持 640 寬 + `fast`，降解析度會讓誤抓變成 3～4 倍
-- [ ] 用另一批圖（換場地、換物件）驗證選出的設定，確認不是只適用這組圖
+- [x] 程式碼部署到正式機（`5dc8d7d`，2026-09-20）：patch 版 library 已載入（`has_scores: true`），設定仍是預設值，行為和原本一樣
+- [ ] **驗證集**：用另一批圖（換場地、換物件）確認暫定設定，排除「只適用這組圖」的可能（流程見下）
+- [x] 正式機的 `.env` 已啟用設定（2026-09-20，使用者手動加入）：`LA_PROMPT_TEMPLATE`、`VLM_MIN_SCORE=0.9`、`VLM_SCORE_FIELD=p_object`
+      **注意：比原訂順序提早，驗證集還沒跑。** 如果驗證沒過，從 `.env` 拿掉這三行、`docker compose up -d server` 就能還原
+
+### 驗證集流程
+
+驗證集只拿來確認，**不拿來挑設定**。看完結果後不再調整門檻或模板；要調的話，得再拍一批新的驗證圖。
+
+1. **使用者**：拍圖放進 `eval/holdout/images/`，檔名規則和 `eval/images/` 相同（`single-`、`distract-`、`decoy-`、`empty-`），每種 3～5 張。
+   - 要換場地、換物件，特別是**同類別、不同材質**的組合，例如塑膠杯 ↔ 紙杯、玻璃瓶 ↔ 塑膠瓶、馬克杯 ↔ 紙杯。
+   - 告訴 Claude 每種場景裡有哪些物件、要問哪些描述。
+2. **Claude**：用 `--propose` 產生標註草稿 → 看 overlay 修正 → 寫進 `eval/holdout/cases.yaml` → 交給使用者確認。
+3. **Claude**：跑 `eval/sweeps/holdout.yaml`（現在的設定 vs 暫定設定），不用停機。
+4. **判定**（事先定好的標準；以下都是門檻 0.9 的暫定設定，和現在的設定、門檻 0 比較）：
+   - 誤抓率 **≤ 5%**，而且**低於**現在的設定。
+   - 命中率比現在的設定低 **不超過 5 個百分點**。
+   - 抽看誤抓和漏抓的 overlay，確認沒有系統性問題，例如某一類物件全部抓不到。
+5. **通過**：在正式機的 `~/Documents/vlm-server/.env` 加上下面三行，再跑 `docker compose up -d server`：
+   ```bash
+   LA_PROMPT_TEMPLATE="Locate the region that matches the following description: {q}, exactly as described."
+   VLM_MIN_SCORE=0.9
+   VLM_SCORE_FIELD=p_object
+   ```
+   **沒通過**：把結果寫進這一節，再決定要換設定（例如只加門檻、不換模板），還是往 finetune 方向走。要回到原本的行為，只要從 `.env` 拿掉這三行。
 - [ ] 預設值寫進 `compose.yaml`，更新 vlm_transport.md 裡 `score` 的語意，交給使用者 commit 並部署
 
 ### 風險
@@ -339,7 +363,7 @@ model card 另有給指代表達式（帶屬性的描述）用的模板：
 
 ## 7. 其他注意事項
 
-- **Hackathon-gpu 上有其他容器**：2026-09-19 看到 `mc-main-nav-engine`、`mc-main-nav-map`、`mc-main-nav-mocks` 在跑（不是這個專案的）。可能搶 CPU／GPU，量測延遲或跑評估前要先確認。
+- **Hackathon-local-server 上有其他容器**：2026-09-19 看到 `mc-main-nav-engine`、`mc-main-nav-map`、`mc-main-nav-mocks` 在跑（不是這個專案的）。可能搶 CPU／GPU，量測延遲或跑評估前要先確認。
 
 ## 代辦筆記
 - [x] buffer 這個目標物是否有找到過，BT engine 會需要這個資訊，需要在它請求的時候回覆它；出現新的目標物描述時清空 buffer。

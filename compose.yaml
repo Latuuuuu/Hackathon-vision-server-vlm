@@ -1,4 +1,4 @@
-# VLM target server on Hackathon-gpu (AMD Ryzen AI 7 350 / Radeon 860M, gfx1152).
+# VLM target server on Hackathon-local-server (AMD Ryzen AI 7 350 / Radeon 860M, gfx1152).
 #   docker compose up -d server         (normally via deploy/deploy.sh)
 #   docker compose run --rm models      (download model files into LOCATE_MODELS_DIR)
 # Settings come from .env; see .env.example.
